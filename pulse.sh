@@ -121,7 +121,14 @@ fi
   [[ -f "$LOG_DIR/compose.log.md" ]] && cat "$LOG_DIR/compose.log.md"
 } > "$LOG_DIR/summary.md"
 
-# 5. Dedup + deliver
+# 5. Bail if compose produced no brief (e.g. context overflow).
+if [[ ! -s "$OUT" ]]; then
+  log "ERROR: compose produced an empty brief. See $LOG_DIR/summary.md"
+  log "       and $LOG_DIR/compose.err for details."
+  exit 1
+fi
+
+# 6. Dedup + deliver
 log "appending seen URLs"
 uv run sources/append_seen.py "$OUT" >> memory/seen_urls.jsonl
 

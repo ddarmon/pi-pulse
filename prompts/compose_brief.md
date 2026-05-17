@@ -12,11 +12,23 @@ Inputs (already attached):
   Read this file first (it may be empty). DO NOT link to any URL
   whose normalized form appears in it.
 
-Use the web search tool to find current sources. Prefer primary
-sources: arXiv, official release notes, author blogs, GitHub releases,
-official documentation. Skip aggregators (TechCrunch, The Verge,
-Hacker News summaries). If a topic produces no fresh primary source,
-**drop the card** -- do not pad.
+Search budget (STRICT -- the model context is 262k tokens and tool
+results can be very large):
+
+- Make **at most 3 `web_search` calls total**, issued one at a time
+  (NOT in a single parallel batch).
+- Each call uses `max_results: 3`.
+- Do not use `site:` filters in the query -- they bias toward dense
+  snippet-heavy results.
+- When a search surfaces a promising URL, prefer `web_fetch` on that
+  single URL over running another search.
+- After 3 total searches plus any web_fetch calls, stop researching
+  and write the brief from what you have.
+
+Prefer primary sources: arXiv, official release notes, author blogs,
+GitHub releases, official documentation. Skip aggregators (TechCrunch,
+The Verge, Hacker News summaries). If a topic produces no fresh
+primary source, **drop the card** -- do not pad.
 
 Composition rules:
 
