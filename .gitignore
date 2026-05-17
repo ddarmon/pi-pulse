@@ -1,6 +1,7 @@
 out/
 logs/
 .tmp/
+.pulse-sessions/
 memory/interests.md
 memory/interests.md.local
 memory/seen_urls.jsonl
