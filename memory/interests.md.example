@@ -1,0 +1,34 @@
+# Durable interests
+
+Copy this file to `memory/interests.md` and edit. It is loaded into the
+distill stage on every run as a stable profile of long-term interests.
+Reloads each run -- no restart needed. The real `interests.md` is
+gitignored so personal details stay local.
+
+Be specific. The point of this file is to make the distill memo (and
+therefore the day's brief) about *your* threads, not generic news.
+
+## Role and projects
+
+- What you do for work, in 1--3 lines. Name the team or institution, the
+  tools you work with. Example: "Family-practice clinic: 4 physicians, panel of 6,800
+  athenahealth EMR, no in-house imaging."
+- Side projects, books in progress, hobbies that you read about.
+
+## Active tooling
+
+- Tools, platforms, frameworks, or resources you use day-to-day.
+- Tools or platforms where release notes would be worth seeing.
+- Anything you'd want a brief to surface release notes for.
+
+## Research interests
+
+- Topics you track across weeks. Be concrete: "Sourdough cold-retard at
+  70% hydration" not "bread baking."
+- Adjacent fields you'd accept novelty cards in.
+
+## Avoid
+
+- Topics you're explicitly not interested in (crypto, generic
+  productivity-app launches, vendor marketing).
+- Aggregators or content farms you never want as primary sources.

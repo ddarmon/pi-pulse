@@ -1,0 +1,10 @@
+out/
+logs/
+.tmp/
+memory/interests.md
+memory/interests.md.local
+memory/seen_urls.jsonl
+.env
+__pycache__/
+*.pyc
+.DS_Store

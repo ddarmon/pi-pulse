@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pi-pulse launchd template. Substitute the paths below for your
+  install, then copy to ~/Library/LaunchAgents/ and load with
+  `launchctl load ~/Library/LaunchAgents/com.user.pi-pulse.plist`.
+
+  Placeholders:
+    {{REPO}}    Absolute path to the pi-pulse checkout
+                (e.g. /Users/you/code/pi-pulse)
+    {{HOME}}    Your home directory (e.g. /Users/you)
+    {{PATH}}    A PATH that includes wherever `pi`, `sesh`, `uv`,
+                `ollama`, and `curl` live (e.g.
+                /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.pi-pulse</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{REPO}}/pulse.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO}}</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>5</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{REPO}}/logs/stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{REPO}}/logs/stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{PATH}}</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
