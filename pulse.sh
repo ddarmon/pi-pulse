@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
-# pi-pulse entrypoint. Runs the four-stage pipeline:
+# pi-pulse entrypoint. Runs the five-stage pipeline:
 #   1. Collect inputs (notes / sesh / Anki) into .tmp/
 #   2. Distill via Pi headless (no tools)
-#   3. Compose via Pi headless (web search enabled)
-#   4. Append URLs to seen ledger and copy brief to delivery dir.
+#   3. Plan via Pi headless (no tools): pick N tracked + M adjacent +
+#      O bridge topics from the memo
+#   4. Expand via Pi headless (web search/fetch enabled): one card per
+#      planned topic, mini-essay prose, bounded search budget per card
+#   5. Append URLs to seen ledger and copy brief to delivery dir.
 #
-# Sessions for both pi calls are routed to .pulse-sessions/YYYY-MM-DD/
-# (gitignored) so they do NOT pollute ~/.pi/agent/sessions/ and never
-# feed tomorrow's distill via sesh discovery.
+# Sessions for all three pi calls are routed to .pulse-sessions/
+# YYYY-MM-DD/ (gitignored) so they do NOT pollute ~/.pi/agent/sessions/
+# and never feed tomorrow's distill via sesh discovery.
 #
 # Per-run logs land in logs/YYYY-MM-DD/:
-#   distill.log.md  compose.log.md  summary.md  errors.log
+#   distill.log.md  plan.log.md  expand.log.md  summary.md  *.err
 #
 # Configuration (env vars; see .env.example):
-#   PI_PULSE_NOTES_DIR    Directory tree of YYYY/MM/DD/*.md notes
-#   PI_PULSE_DELIVERY     Directory to copy the daily brief into
-#   PI_PULSE_ANKI_SEARCH  Path to anki_search.py (optional)
-#   PI_PROVIDER           Pi provider (default: ollama)
-#   PI_MODEL              Pi model    (default: kimi-k2.6:cloud)
-#   PI_PULSE_NOTES_SINCE  Days of notes history (default: 30)
-#   PI_PULSE_SESH_SINCE   Days of sesh history  (default: 7)
+#   PI_PULSE_NOTES_DIR        Directory tree of YYYY/MM/DD/*.md notes
+#   PI_PULSE_DELIVERY         Directory to copy the daily brief into
+#   PI_PULSE_ANKI_SEARCH      Path to anki_search.py (optional)
+#   PI_PROVIDER               Pi provider (default: ollama)
+#   PI_MODEL                  Pi model    (default: kimi-k2.6:cloud)
+#   PI_PULSE_NOTES_SINCE      Days of notes history (default: 30)
+#   PI_PULSE_SESH_SINCE       Days of sesh history  (default: 7)
+#   PI_PULSE_CARDS_TRACKED    Tracked card quota   (default: 5)
+#   PI_PULSE_CARDS_ADJACENT   Adjacent card quota  (default: 2)
+#   PI_PULSE_CARDS_BRIDGE     Bridge card quota    (default: 1)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -40,8 +46,13 @@ PI_PROVIDER="${PI_PROVIDER:-ollama}"
 PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
 NOTES_SINCE="${PI_PULSE_NOTES_SINCE:-30}"
 SESH_SINCE="${PI_PULSE_SESH_SINCE:-7}"
+TRACKED="${PI_PULSE_CARDS_TRACKED:-5}"
+ADJACENT="${PI_PULSE_CARDS_ADJACENT:-2}"
+BRIDGE="${PI_PULSE_CARDS_BRIDGE:-1}"
+export TRACKED ADJACENT BRIDGE
 
-mkdir -p .tmp out "$LOG_DIR" "$SESSION_DIR/distill" "$SESSION_DIR/compose"
+mkdir -p .tmp out "$LOG_DIR" \
+  "$SESSION_DIR/distill" "$SESSION_DIR/plan" "$SESSION_DIR/expand"
 if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
   mkdir -p "$PI_PULSE_DELIVERY"
 fi
@@ -91,23 +102,48 @@ if [[ -n "$distill_session" ]]; then
     > "$LOG_DIR/distill.log.md"
 fi
 
-# 3. Compose (web search enabled via Pi's installed packages)
-log "compose stage: ${PI_PROVIDER}/${PI_MODEL}"
-compose_start=$SECONDS
-pi -p "$(cat prompts/compose_brief.md)" \
+# 3. Plan (no tools)
+log "plan stage: ${PI_PROVIDER}/${PI_MODEL} (quotas T=${TRACKED} A=${ADJACENT} B=${BRIDGE})"
+plan_start=$SECONDS
+PLAN_PROMPT=$(sed -e "s|{{TRACKED}}|${TRACKED}|g" \
+                  -e "s|{{ADJACENT}}|${ADJACENT}|g" \
+                  -e "s|{{BRIDGE}}|${BRIDGE}|g" \
+                  prompts/compose_plan.md)
+pi -p "$PLAN_PROMPT" \
    --provider "$PI_PROVIDER" --model "$PI_MODEL" \
-   --session-dir "$SESSION_DIR/compose" \
+   --no-skills \
+   --session-dir "$SESSION_DIR/plan" \
    @.tmp/interests_today.md @memory/seen_urls.jsonl \
-   > "$OUT" \
-   2>"$LOG_DIR/compose.err"
-log "compose finished in $((SECONDS - compose_start))s"
-compose_session=$(newest_session "$SESSION_DIR/compose")
-if [[ -n "$compose_session" ]]; then
-  uv run sources/inspect_session.py "$compose_session" --label "compose" \
-    > "$LOG_DIR/compose.log.md"
+   > .tmp/plan.md \
+   2>"$LOG_DIR/plan.err"
+log "plan finished in $((SECONDS - plan_start))s"
+plan_session=$(newest_session "$SESSION_DIR/plan")
+if [[ -n "$plan_session" ]]; then
+  uv run sources/inspect_session.py "$plan_session" --label "plan" \
+    > "$LOG_DIR/plan.log.md"
+fi
+if [[ ! -s .tmp/plan.md ]]; then
+  log "ERROR: plan stage produced empty output. See $LOG_DIR/plan.err"
+  exit 1
 fi
 
-# 4. Aggregate summary
+# 4. Expand (web search/fetch enabled via Pi's installed packages)
+log "expand stage: ${PI_PROVIDER}/${PI_MODEL}"
+expand_start=$SECONDS
+pi -p "$(cat prompts/compose_expand.md)" \
+   --provider "$PI_PROVIDER" --model "$PI_MODEL" \
+   --session-dir "$SESSION_DIR/expand" \
+   @.tmp/plan.md @.tmp/interests_today.md @memory/seen_urls.jsonl \
+   > "$OUT" \
+   2>"$LOG_DIR/expand.err"
+log "expand finished in $((SECONDS - expand_start))s"
+expand_session=$(newest_session "$SESSION_DIR/expand")
+if [[ -n "$expand_session" ]]; then
+  uv run sources/inspect_session.py "$expand_session" --label "expand" \
+    > "$LOG_DIR/expand.log.md"
+fi
+
+# 4b. Aggregate summary
 {
   echo "# pi-pulse run ${TODAY}"
   echo
@@ -116,15 +152,17 @@ fi
     echo "- delivery: \`${PI_PULSE_DELIVERY}/${TODAY}.md\`"
   fi
   echo "- session archive: \`${SESSION_DIR}/\`"
+  echo "- card quotas: tracked=${TRACKED} adjacent=${ADJACENT} bridge=${BRIDGE}"
   echo
   [[ -f "$LOG_DIR/distill.log.md" ]] && cat "$LOG_DIR/distill.log.md"
-  [[ -f "$LOG_DIR/compose.log.md" ]] && cat "$LOG_DIR/compose.log.md"
+  [[ -f "$LOG_DIR/plan.log.md" ]]    && cat "$LOG_DIR/plan.log.md"
+  [[ -f "$LOG_DIR/expand.log.md" ]]  && cat "$LOG_DIR/expand.log.md"
 } > "$LOG_DIR/summary.md"
 
-# 5. Bail if compose produced no brief (e.g. context overflow).
+# 5. Bail if expand produced no brief (e.g. context overflow).
 if [[ ! -s "$OUT" ]]; then
-  log "ERROR: compose produced an empty brief. See $LOG_DIR/summary.md"
-  log "       and $LOG_DIR/compose.err for details."
+  log "ERROR: expand produced an empty brief. See $LOG_DIR/summary.md"
+  log "       and $LOG_DIR/expand.err for details."
   exit 1
 fi
 
