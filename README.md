@@ -27,11 +27,13 @@ Each morning the pipeline:
 
 ```
 pulse.sh                    entrypoint (manual or launchd)
-prompts/                    distill, plan, and expand templates
+scripts/interview.sh        interactive profile interviewer
+prompts/                    distill, plan, expand, interview templates
 sources/                    notes / sesh / anki collectors, URL dedup,
                             session inspector
-memory/interests.md         hand-maintained durable profile (gitignored)
+memory/interests.md         durable profile (gitignored)
 memory/interests.md.example template to copy from
+memory/interests-history/   profile snapshots from interview.sh (gitignored)
 memory/seen_urls.jsonl      dedup ledger (auto-appended, gitignored)
 out/                        local copy of each day's brief (gitignored)
 logs/YYYY-MM-DD/            per-run logs (gitignored): distill.log.md,
@@ -74,6 +76,17 @@ cp memory/interests.md.example memory/interests.md      # then edit profile
 At a minimum, set `PI_PULSE_NOTES_DIR` in `.env` to the root of your
 `YYYY/MM/DD/*.md` notes tree.
 
+For the profile, you can either hand-edit `memory/interests.md` or run
+the interactive interview, which seeds it on first run and rewrites it
+in place on subsequent runs:
+
+```bash
+./scripts/interview.sh
+```
+
+The previous profile is snapshotted to `memory/interests-history/`
+before each interview, and a diff is printed on exit.
+
 ## Run manually
 
 ```bash
@@ -114,7 +127,8 @@ beyond the launchd template.
 
 ## Tuning
 
--   Edit `memory/interests.md` -- it feeds every run.
+-   Edit `memory/interests.md` -- it feeds every run. Or run
+    `./scripts/interview.sh` for a guided refresh.
 -   Card mix: set `PI_PULSE_CARDS_TRACKED`, `PI_PULSE_CARDS_ADJACENT`,
     `PI_PULSE_CARDS_BRIDGE` in `.env`. Defaults: 5 / 2 / 1 = 8 cards.
 -   Card shape and structure: `prompts/compose_expand.md` (word budget,

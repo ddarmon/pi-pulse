@@ -4,6 +4,7 @@ logs/
 .pulse-sessions/
 memory/interests.md
 memory/interests.md.local
+memory/interests-history/
 memory/seen_urls.jsonl
 .env
 __pycache__/
