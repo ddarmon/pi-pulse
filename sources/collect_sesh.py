@@ -67,6 +67,19 @@ def main() -> int:
     deny = [s.strip() for s in args.deny_projects.split(",") if s.strip()]
     allow = {s.strip() for s in args.providers.split(",") if s.strip()}
 
+    # Build/refresh the index. sesh CLI subcommands like `sessions` and
+    # `export` require an index; if it is missing or stale, every call
+    # fails with exit 1 and pulse.sh dies under `set -e`. Refresh is
+    # idempotent and takes a few seconds.
+    try:
+        subprocess.check_call(
+            [sesh, "refresh"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"WARN: `sesh refresh` failed: {exc}", file=sys.stderr)
+
     try:
         raw = subprocess.check_output([sesh, "sessions"], text=True)
     except subprocess.CalledProcessError as exc:
