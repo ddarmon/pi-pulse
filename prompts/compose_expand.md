@@ -45,11 +45,11 @@ section listing any dropped cards and why.
 Typography:
 
 -   Markdown only, no emoji.
--   Math: vectors as `\mathbf{}` or `\boldsymbol{}`, never plain bold.
-    Inline math `$...$`, display math `$$...$$`.
+-   If math appears: vectors as `\mathbf{}` or `\boldsymbol{}`, never
+    plain bold. Inline math `$...$`, display math `$$...$$`.
 -   Exactly one inline primary-source link per card.
--   If a card cites a paper, include the identifier (DOI, arXiv ID,
-    or similar) and a one-clause method gloss.
+-   If a card cites a paper, include the identifier (DOI, arXiv ID, or
+    similar) and a one-clause method gloss.
 
 Output structure:
 

@@ -37,8 +37,8 @@ day's cards will hit. This becomes the brief's lede.>
 
 ## Card 1 (tracked)
 
-- **Topic:** <specific and named -- "Sourdough cold-retard temperature for 70% hydration",
-  not "bread baking">
+- **Topic:** <specific and named -- "Sourdough cold-retard
+  temperature for 70% hydration", not "bread baking">
 - **Memo source:** <quote the bullet from interests_today.md that
   triggered this>
 - **Search query:** <one short web query; NO site: filters; assume
@@ -61,8 +61,10 @@ final line:
 
 Rules:
 
--   Topics must be SPECIFIC. "Late-blight resistance in heirloom tomato varietals" not "vegetable
-    gardening." "Companion planting basil with tomatoes" not "bread baking."
+-   Topics must be SPECIFIC. Name the technique, release, or named
+    entity --- "Late-blight resistance in heirloom tomato varietals" not
+    "vegetable gardening." "Sourdough cold-retard at 70% hydration" not
+    "bread baking."
 -   Avoid any topic in the memo's "Avoid" section.
 -   Diversify: do not select two cards on the same paper, library, or
     release. Spread across distinct memo bullets so the brief covers
