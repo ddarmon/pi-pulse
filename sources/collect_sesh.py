@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -61,11 +62,24 @@ def main() -> int:
         help="Comma-separated provider allow list",
     )
     ap.add_argument("--sesh", default=None, help="Path to sesh binary")
+    ap.add_argument(
+        "--exclude-cwd",
+        action="append",
+        default=[],
+        help="Drop sessions whose project_path is this directory or a descendant. Repeatable.",
+    )
     args = ap.parse_args()
 
     sesh = find_sesh(args.sesh)
     deny = [s.strip() for s in args.deny_projects.split(",") if s.strip()]
     allow = {s.strip() for s in args.providers.split(",") if s.strip()}
+
+    excludes: list[Path] = []
+    for raw in args.exclude_cwd:
+        try:
+            excludes.append(Path(raw).expanduser().resolve(strict=False))
+        except (OSError, RuntimeError) as exc:
+            print(f"WARN: could not resolve --exclude-cwd {raw!r}: {exc}", file=sys.stderr)
 
     # Build/refresh the index. sesh CLI subcommands like `sessions` and
     # `export` require an index; if it is missing or stale, every call
@@ -105,6 +119,14 @@ def main() -> int:
         path = s.get("project_path", "") or ""
         if any(d in path for d in deny):
             continue
+        if excludes and path:
+            try:
+                rp = Path(path).expanduser().resolve(strict=False)
+                if any(rp == e or rp.is_relative_to(e) for e in excludes):
+                    continue
+            except (OSError, RuntimeError):
+                if any(path == str(e) or path.startswith(str(e) + os.sep) for e in excludes):
+                    continue
         recent.append(s)
 
     print(f"# sesh sessions (last {args.since} days, {len(recent)} sessions)")

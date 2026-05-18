@@ -6,11 +6,13 @@ plan/expand split with N/M/O quotas; sesh auto-refresh; on-demand
 profile interview at `scripts/interview.sh`; brave-search as the sole
 search/fetch path in expand (no built-in `web_search`/`web_fetch`);
 standalone HTML render via `sources/render_html.py` alongside the
-markdown brief; and a hard prompt rule against `Write`/`Edit` on the
-output file (the model must emit the brief as final stdout text, since
-`pulse.sh` captures stdout). The pipeline runs end-to-end. Below is the
-remaining backlog in recommended order, plus context the next agent will
-need.
+markdown brief; a hard prompt rule against `Write`/`Edit` on the output
+file (the model must emit the brief as final stdout text, since
+`pulse.sh` captures stdout); and pi-pulse repo sessions excluded from
+sesh collection via `collect_sesh.py --exclude-cwd` so the
+meta-recursion loop is broken. The pipeline runs end-to-end. Below is
+the remaining backlog in recommended order, plus context the next agent
+will need.
 
 Read `CLAUDE.md` first for architecture, conventions, and cost
 awareness. This file picks up where that ends.
@@ -34,7 +36,62 @@ snapshot/diff pattern from `scripts/interview.sh` (snapshot to
 Cost: adds a fourth pi call per run. Gate behind an env var
 (`PI_PULSE_SUGGEST_PROFILE=1`) so the user opts in.
 
-### 2. Strict citation verify-then-include (defer)
+### 2. Cross-Pulse topic awareness over a sliding window
+
+The existing dedup mechanism (`memory/seen_urls.jsonl`) operates at URL
+granularity: if today's expand surfaces a URL already in the ledger, the
+card finds another source or drops. Topic-level dedup is missing, so
+today's plan can re-pick a topic yesterday's brief already covered, just
+via a different primary source. The user wants two behaviors:
+
+1.  **Skip topics recently covered**, unless there is a substantive
+    update worth surfacing.
+2.  **When a topic does warrant expansion**, mark the card as a
+    follow-up to the previous Pulse rather than a fresh discovery.
+
+The first half is straightforward; the second half is the hard UX
+problem.
+
+Implementation sketch (the next session should refine this before
+coding):
+
+-   Before the plan stage, build a `.tmp/recent_pulses.md` bundle by
+    walking the last N days of `out/YYYY-MM-DD.md` (default N=7,
+    configurable via `PI_PULSE_HISTORY_DAYS`). Keep just the H2 card
+    title lines plus the opening sentence of each card, so the bundle
+    stays small.
+-   Pass `.tmp/recent_pulses.md` as a third input to the plan-stage `pi`
+    invocation alongside `interests_today.md` and `seen_urls.jsonl`.
+-   Extend `prompts/compose_plan.md` with a rule: if a candidate topic
+    matches a card title in the recent-pulses bundle, drop it by
+    default. The plan MAY mark the topic as a follow-up to a specific
+    prior date only when the memo (or active-threads section) shows new
+    substantive ground worth covering; cap follow-ups at 1 per run so
+    they do not crowd out genuinely new topics.
+-   At expand time, follow-up cards should open with a one-clause
+    callback ("Last week's Pulse covered X; the new ground is Y") rather
+    than re-explaining the original topic from scratch.
+
+UX failure modes to design against:
+
+-   **Over-suppression.** A tracked thread (e.g. "Gemma 4 development")
+    that is genuinely evolving daily must not be permanently blocked by
+    a single past mention. The user's "Active threads" memo section is
+    the live signal; respect it over the recent-pulses bundle when they
+    conflict.
+-   **Callback fatigue.** If every brief opens with "last week we
+    covered...", novelty collapses. The 1-per-run cap and the
+    "substantive new ground" gate are both load-bearing.
+-   **Soft recency, not hard window.** A topic covered yesterday is much
+    more painful to repeat than one covered 30 days ago. Whatever
+    matching the plan does should prefer recent matches and gradually
+    tolerate older overlaps.
+
+Consider shipping the dedup half first (drop overlaps, no follow-up
+mechanism) and the expansion half second once the dedup is observably
+calibrated.
+
+### 3. Strict citation verify-then-include (defer)
 
 After `expand`, fetch every URL in the brief. If 404, or if the page
 content doesn't mention the card's key claim (use a small
@@ -103,10 +160,17 @@ runs.
     #1 (profile auto-suggest) adds a fourth pi call and will push wall
     time further.
 
-6.  **Meta-recursion.** This conversation lives in the user's sesh
-    index. Tomorrow's distill will include pi-pulse iteration work as an
-    "active thread," producing self-referential cards. Not a bug; just
-    be aware when reading the next brief.
+6.  **Meta-recursion (mitigated 2026-05-18).** Before this fix, pi-pulse
+    iteration conversations lived in the user's sesh index and fed
+    tomorrow's distill as an "active thread," producing self-referential
+    cards. `pulse.sh` now passes `--exclude-cwd "$PWD"` to
+    `collect_sesh.py`, which drops sessions whose `project_path` is the
+    repo or a descendant. Trade-off: any unrelated session the user runs
+    while `cd`'d into the repo for other work is also excluded;
+    acceptable given the recursion cost. If a future brief still shows
+    pi-pulse iteration as a thread, check whether the relevant session's
+    `project_path` is actually outside the repo (e.g. started from `~`
+    and only later `cd`'d in).
 
 ## Gotchas learned in the first session
 

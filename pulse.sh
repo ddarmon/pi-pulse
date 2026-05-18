@@ -80,7 +80,7 @@ fi
 log "collecting notes (${NOTES_SINCE}d)"
 uv run sources/collect_obsidian.py --since "$NOTES_SINCE" > .tmp/chats_recent.md 2>"$LOG_DIR/collect-obsidian.err"
 log "collecting sesh sessions (${SESH_SINCE}d)"
-uv run sources/collect_sesh.py     --since "$SESH_SINCE"  > .tmp/sesh_recent.md  2>"$LOG_DIR/collect-sesh.err"
+uv run sources/collect_sesh.py     --since "$SESH_SINCE" --exclude-cwd "$PWD" > .tmp/sesh_recent.md 2>"$LOG_DIR/collect-sesh.err"
 log "collecting anki signals"
 uv run sources/collect_anki.py                            > .tmp/anki_signals.md 2>"$LOG_DIR/collect-anki.err" || true
 

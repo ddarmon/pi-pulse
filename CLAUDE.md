@@ -80,6 +80,13 @@ when the user explicitly asks for a test run.
     `~/.pi/agent/sessions/`, which is sesh's canonical discovery path.
     Without this, today's pulse run would feed tomorrow's distill via
     `collect_sesh.py`.
+-   `pulse.sh` passes `--exclude-cwd "$PWD"` to `collect_sesh.py`, which
+    drops sessions whose `project_path` is the repo root or a
+    descendant. This stops meta-recursion: claude-code conversations,
+    `scripts/interview.sh` runs, and ad-hoc debugging done while `cd`'d
+    into the repo no longer feed tomorrow's distill as an "active
+    thread." Trade-off: any unrelated session you run while `cd`'d into
+    this repo is also excluded.
 
 ## Working on this repo
 
