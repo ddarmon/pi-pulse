@@ -19,10 +19,9 @@ Process. For each card in the plan, IN ORDER:
 1.  Run ONE search using the `brave-search` skill
     (https://github.com/badlogic/pi-skills/tree/main/brave-search).
     Invoke it via Bash:
-    `{baseDir}/search.js "<plan's suggested query>" -n 3`. Do NOT
-    use the built-in `web_search` tool -- its results are not
-    size-bounded and have overflowed the model's context window on prior
-    runs.
+    `{baseDir}/search.js "<plan's suggested query>" -n 3`. Do NOT use
+    the built-in `web_search` tool -- its results are not size-bounded
+    and have overflowed the model's context window on prior runs.
 2.  If the first result list surfaces one obviously strong primary
     source (arXiv, GitHub release, official docs, author blog), you MAY
     follow up with at most one content fetch using the same skill:
@@ -88,3 +87,8 @@ If any cards were dropped:
 
 Start with `# Pulse <today's date>` and the lede paragraph. No other
 preamble, no closing sign-off.
+
+Output channel: emit the brief as your final assistant text message. Do
+NOT use the Write or Edit tools to create or modify `out/YYYY-MM-DD.md`
+-- the pipeline captures your stdout into that file, and a concurrent
+Write call races the stdout redirection and corrupts the output.

@@ -74,5 +74,6 @@ Rules:
     author blog). If a thread is interesting but no plausible fresh
     source exists, do not select it.
 -   The Search query is a starting point; the expand stage may follow up
-    with `web_fetch` on a URL the first result reveals.
+    with a `brave-search` `content.js` fetch on a URL the first result
+    reveals.
 -   Do not use web search yourself -- you have no tools in this stage.

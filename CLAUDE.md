@@ -17,10 +17,13 @@ Five stages, three pi calls:
 3.  **plan** -- `pi -p prompts/compose_plan.md --no-skills` picks
     exactly `PI_PULSE_CARDS_{TRACKED,ADJACENT,BRIDGE}` topics from the
     memo into `.tmp/plan.md` (default 5/2/1 = 8 cards).
-4.  **expand** -- `pi -p prompts/compose_expand.md` (web search/fetch
-    enabled) writes one 250--400 word prose card per planned topic into
-    `out/YYYY-MM-DD.md`. Budget: at most one `web_search` + one
-    `web_fetch` per card.
+4.  **expand** -- `pi -p prompts/compose_expand.md` writes one 250--400
+    word prose card per planned topic into `out/YYYY-MM-DD.md`. Search
+    is done via the `brave-search` skill (`search.js` for queries,
+    `content.js` for fetches); the built-in `web_search` and `web_fetch`
+    tools are explicitly forbidden in the prompt because their results
+    are unbounded in size and have overflowed context before. Budget: at
+    most one `search.js` + one `content.js` per card.
 5.  **deliver** -- append URLs to `memory/seen_urls.jsonl`; copy brief
     to `$PI_PULSE_DELIVERY` if set.
 
@@ -35,8 +38,8 @@ when the user explicitly asks for a test run.
 
 -   **Prompt placeholders use double-brace syntax**, not `$NAME` -- see
     `prompts/compose_plan.md` for the in-file convention. Substitute
-    placeholders in pulse.sh with `sed`, not `envsubst`. The
-    launchd template uses the same double-brace convention.
+    placeholders in pulse.sh with `sed`, not `envsubst`. The launchd
+    template uses the same double-brace convention.
 -   **No personal data in committed files.** `memory/interests.md`,
     `memory/seen_urls.jsonl`, `out/`, `logs/`, `.pulse-sessions/`,
     `.env`, and `memory/interests.md.local` are all gitignored. The
@@ -61,14 +64,15 @@ when the user explicitly asks for a test run.
 
 ## Known constraints
 
--   `kimi-k2.6:cloud` context is 262k tokens. `web_search` results are
-    not size-bounded; one call has been observed at 1.1M chars. The
-    per-card search budget in `compose_expand.md` keeps total usage
-    comfortably under context. If overflow recurs, switch the search
-    tool to the `brave-search` skill (size-bounded markdown).
--   `sesh` requires a built index. `collect_sesh.py` runs
-    `sesh refresh` before `sesh sessions` (idempotent, \~5s). Removing
-    that call will silently break `pulse.sh` under `set -e`.
+-   `kimi-k2.6:cloud` context is 262k tokens. The built-in `web_search`
+    tool returns unbounded results (one call was observed at 1.1M
+    chars), which is why `compose_expand.md` mandates the `brave-search`
+    skill instead: its `search.js` and `content.js` return size-bounded
+    markdown. Do not reintroduce `web_search`/`web_fetch` without a
+    size-bounding plan.
+-   `sesh` requires a built index. `collect_sesh.py` runs `sesh refresh`
+    before `sesh sessions` (idempotent, \~5s). Removing that call will
+    silently break `pulse.sh` under `set -e`.
 -   `pi --session-dir` routes session JSONLs off
     `~/.pi/agent/sessions/`, which is sesh's canonical discovery path.
     Without this, today's pulse run would feed tomorrow's distill via
