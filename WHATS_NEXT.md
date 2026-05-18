@@ -65,13 +65,18 @@ runs.
     that quietly disappears). Stay vigilant about required elements
     being lost when a stage gets reshaped.
 
-3.  **Context overflow risk.** `kimi-k2.6:cloud` is 262k tokens.
-    `web_search` returns are not size-bounded; one call was observed at
-    1.1M chars. The expand prompt enforces 1 search + 1 fetch per card,
-    which is prompt-level not tool-level. If overflow recurs, replace
-    `@ollama/pi-web-search` with the `brave-search` skill (returns
-    size-bounded markdown). The user has the brave-search skill
-    installed but no Brave API key.
+3.  **Context overflow risk (mitigated 2026-05-17).** `kimi-k2.6:cloud`
+    is 262k tokens. The 2026-05-17 run reproduced the overflow: 8
+    `web_search` calls totaled 276,288 input tokens, pi compacted
+    mid-expand, and the model produced an empty brief.
+    `prompts/compose_expand.md` now requires the `brave-search` skill
+    (https://github.com/badlogic/pi-skills/tree/main/brave-search,
+    installed at `~/.claude/skills/brave-search`) for both search and
+    fetch, since its markdown output is size-bounded. The per-card "1
+    search + 1 fetch" budget is still prompt-level, not tool-level -- if
+    a future run overflows again despite brave-search, look at the
+    expand session JSONL for the largest tool result and cap further
+    upstream (e.g. drop to `-n 2`).
 
 4.  **Wall time growth.** Original two-pi-call compose was \~30s.
     Plan/expand split with per-card search budget puts a full run at
@@ -89,21 +94,44 @@ runs.
     double-brace pairs inside backticked code spans. Use double-brace
     placeholders in prompt files (see `prompts/compose_plan.md`) and
     substitute with `sed` in `pulse.sh`. Do not use `envsubst`.
+
 -   **`sesh` requires `sesh refresh` before `sessions` works.**
     `collect_sesh.py` does this; do not remove the call without
     replacing the safeguard.
+
 -   **`pi --session-dir` is load-bearing.** Without it, pulse runs
     pollute `~/.pi/agent/sessions/`, which sesh discovers, which means
     today's run becomes tomorrow's distill input. The whole isolation
     story breaks.
+
 -   **`pulse.sh` exits 1 on empty stage output.** Honor this: do not
     swallow exit codes or add fallbacks that paper over a failed stage.
     The guard exists to surface context-overflow and similar errors
     loudly.
+
 -   **Don't run `pulse.sh` casually.** Three pi calls, 5--7 min, spends
     real Ollama Cloud tokens (currently free but that may change). The
     user explicitly invokes it; don't trigger it as a "test" without
     asking.
+
+-   **`BRAVE_API_KEY` and launchd inheritance.** Expand now depends on
+    `BRAVE_API_KEY`. launchd does NOT inherit `~/.zprofile` or
+    `~/.zshrc`, so a key exported only in the shell profile will work
+    interactively but silently break the 5:30am cron -- expand will
+    return no search results and exit with the same empty-brief error as
+    a context overflow. The key belongs in `.env`, which `pulse.sh`
+    sources explicitly. To verify the launchd path will succeed,
+    simulate its stripped environment:
+
+    ``` bash
+    env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/bin:/bin" bash -c '
+      cd <repo> &&
+      set -a && source .env && set +a &&
+      ~/.claude/skills/brave-search/search.js "test" -n 1 >/dev/null &&
+      echo OK'
+    ```
+
+    If that prints `OK`, the scheduled run will see the key.
 
 ## How to validate a change
 
@@ -123,6 +151,6 @@ For any change to the pipeline:
 ## Repo state at handoff
 
 -   Branch: `main`
--   Last commit: `3713531 Auto-refresh sesh index in collect_sesh.py`
+-   Latest commit: run `git log -1 --oneline` (this line rots fast).
 -   Remote: `github.com/ddarmon/pi-pulse` (private)
 -   The user pushes manually.

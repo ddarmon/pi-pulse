@@ -11,6 +11,13 @@
     {{PATH}}    A PATH that includes wherever `pi`, `sesh`, `uv`,
                 `ollama`, and `curl` live (e.g.
                 /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin)
+
+  Secrets (BRAVE_API_KEY, etc.) belong in {{REPO}}/.env, which
+  pulse.sh sources before running any stage. launchd does NOT
+  inherit your shell profile (~/.zprofile, ~/.zshrc), so keys
+  exported only there will be missing at run time and the expand
+  stage will silently produce an empty brief. Do not duplicate
+  secrets into the EnvironmentVariables block below.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
