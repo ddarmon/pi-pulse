@@ -170,9 +170,19 @@ fi
 log "appending seen URLs"
 uv run sources/append_seen.py "$OUT" >> memory/seen_urls.jsonl
 
+OUT_HTML="${OUT%.md}.html"
+log "rendering HTML"
+if ! uv run sources/render_html.py "$OUT" "$OUT_HTML" 2>"$LOG_DIR/render_html.err"; then
+  log "WARN: html render failed; see $LOG_DIR/render_html.err"
+  OUT_HTML=""
+fi
+
 if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
   log "copying brief to $PI_PULSE_DELIVERY"
   cp "$OUT" "$PI_PULSE_DELIVERY/${TODAY}.md"
+  if [[ -n "$OUT_HTML" && -f "$OUT_HTML" ]]; then
+    cp "$OUT_HTML" "$PI_PULSE_DELIVERY/${TODAY}.html"
+  fi
 fi
 
 log "done: $OUT"

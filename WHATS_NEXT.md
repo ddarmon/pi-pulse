@@ -29,18 +29,7 @@ snapshot/diff pattern from `scripts/interview.sh` (snapshot to
 Cost: adds a fourth pi call per run. Gate behind an env var
 (`PI_PULSE_SUGGEST_PROFILE=1`) so the user opts in.
 
-### 2. Render brief as standalone HTML
-
-Add `sources/render_html.py`. Prefer `pandoc -s --mathjax` if available;
-fall back to the Python `markdown` package with a small embedded CSS
-block. Output goes to `out/YYYY-MM-DD.html` plus a copy into
-`$PI_PULSE_DELIVERY` alongside the `.md`.
-
-Self-contained: single file, embedded CSS, MathJax loaded from CDN only
-if math is detected. Should render acceptably on iPhone and desktop
-without further styling.
-
-### 3. Strict citation verify-then-include (defer)
+### 2. Strict citation verify-then-include (defer)
 
 After `expand`, fetch every URL in the brief. If 404, or if the page
 content doesn't mention the card's key claim (use a small

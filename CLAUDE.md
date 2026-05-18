@@ -24,8 +24,11 @@ Five stages, three pi calls:
     tools are explicitly forbidden in the prompt because their results
     are unbounded in size and have overflowed context before. Budget: at
     most one `search.js` + one `content.js` per card.
-5.  **deliver** -- append URLs to `memory/seen_urls.jsonl`; copy brief
-    to `$PI_PULSE_DELIVERY` if set.
+5.  **deliver** -- append URLs to `memory/seen_urls.jsonl`; render
+    `out/YYYY-MM-DD.html` from the markdown via `sources/render_html.py`
+    (pandoc preferred, Python `markdown` fallback, MathJax loaded only
+    when math is detected); copy both `.md` and `.html` to
+    `$PI_PULSE_DELIVERY` if set.
 
 ## Cost and runtime awareness
 
