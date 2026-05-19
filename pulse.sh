@@ -23,9 +23,12 @@
 #   PI_MODEL                  Pi model    (default: kimi-k2.6:cloud)
 #   PI_PULSE_NOTES_SINCE      Days of notes history (default: 30)
 #   PI_PULSE_SESH_SINCE       Days of sesh history  (default: 7)
+#   PI_PULSE_HISTORY_DAYS     Days of prior briefs for dedup (default: 7)
 #   PI_PULSE_CARDS_TRACKED    Tracked card quota   (default: 5)
 #   PI_PULSE_CARDS_ADJACENT   Adjacent card quota  (default: 2)
 #   PI_PULSE_CARDS_BRIDGE     Bridge card quota    (default: 1)
+#   PI_PULSE_CARDS_FOLLOWUP   Follow-up card cap   (default: 1; 0 disables;
+#                             consumes one tracked slot)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -46,10 +49,12 @@ PI_PROVIDER="${PI_PROVIDER:-ollama}"
 PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
 NOTES_SINCE="${PI_PULSE_NOTES_SINCE:-30}"
 SESH_SINCE="${PI_PULSE_SESH_SINCE:-7}"
+HISTORY_DAYS="${PI_PULSE_HISTORY_DAYS:-7}"
 TRACKED="${PI_PULSE_CARDS_TRACKED:-5}"
 ADJACENT="${PI_PULSE_CARDS_ADJACENT:-2}"
 BRIDGE="${PI_PULSE_CARDS_BRIDGE:-1}"
-export TRACKED ADJACENT BRIDGE
+FOLLOWUP="${PI_PULSE_CARDS_FOLLOWUP:-1}"
+export TRACKED ADJACENT BRIDGE FOLLOWUP
 
 mkdir -p .tmp out "$LOG_DIR" \
   "$SESSION_DIR/distill" "$SESSION_DIR/plan" "$SESSION_DIR/expand"
@@ -103,17 +108,22 @@ if [[ -n "$distill_session" ]]; then
 fi
 
 # 3. Plan (no tools)
-log "plan stage: ${PI_PROVIDER}/${PI_MODEL} (quotas T=${TRACKED} A=${ADJACENT} B=${BRIDGE})"
+log "building recent-pulses bundle (${HISTORY_DAYS}d, today excluded)"
+uv run sources/build_recent_pulses.py --days "$HISTORY_DAYS" \
+   > .tmp/recent_pulses.md \
+   2>"$LOG_DIR/build-recent.err"
+log "plan stage: ${PI_PROVIDER}/${PI_MODEL} (quotas T=${TRACKED} A=${ADJACENT} B=${BRIDGE} F=${FOLLOWUP})"
 plan_start=$SECONDS
 PLAN_PROMPT=$(sed -e "s|{{TRACKED}}|${TRACKED}|g" \
                   -e "s|{{ADJACENT}}|${ADJACENT}|g" \
                   -e "s|{{BRIDGE}}|${BRIDGE}|g" \
+                  -e "s|{{FOLLOWUP}}|${FOLLOWUP}|g" \
                   prompts/compose_plan.md)
 pi -p "$PLAN_PROMPT" \
    --provider "$PI_PROVIDER" --model "$PI_MODEL" \
    --no-skills \
    --session-dir "$SESSION_DIR/plan" \
-   @.tmp/interests_today.md @memory/seen_urls.jsonl \
+   @.tmp/interests_today.md @.tmp/recent_pulses.md @memory/seen_urls.jsonl \
    > .tmp/plan.md \
    2>"$LOG_DIR/plan.err"
 log "plan finished in $((SECONDS - plan_start))s"
@@ -152,7 +162,7 @@ fi
     echo "- delivery: \`${PI_PULSE_DELIVERY}/${TODAY}.md\`"
   fi
   echo "- session archive: \`${SESSION_DIR}/\`"
-  echo "- card quotas: tracked=${TRACKED} adjacent=${ADJACENT} bridge=${BRIDGE}"
+  echo "- card quotas: tracked=${TRACKED} adjacent=${ADJACENT} bridge=${BRIDGE} followup=${FOLLOWUP}"
   echo
   [[ -f "$LOG_DIR/distill.log.md" ]] && cat "$LOG_DIR/distill.log.md"
   [[ -f "$LOG_DIR/plan.log.md" ]]    && cat "$LOG_DIR/plan.log.md"

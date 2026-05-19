@@ -38,6 +38,17 @@ Process. For each card in the plan, IN ORDER:
         an experiment to run, a paper to chase, a small change to make.
 4.  Card title: `## Title sentence-case`. For adjacent cards, append
     `(adjacent)` to the title. For the bridge card, append `(bridge)`.
+    For a follow-up card (plan tag `(follow-up of YYYY-MM-DD)`),
+    append only `(follow-up)` to the title -- the prior date lives in
+    the opening sentence (see next step), not the heading.
+5.  If the plan tagged a card `(follow-up of YYYY-MM-DD)`, the card's
+    first sentence must name that prior date and state what is new
+    since -- e.g. "The 2026-05-11 Pulse covered Gemma 4's dual-RoPE
+    base scaling; this week's release notes add explicit per-layer
+    embedding injection formulas." The plan's `Prior coverage:` and
+    `New ground:` fields are inputs for shaping that sentence; do not
+    paste them verbatim. The remainder of the card follows the
+    standard 250--400 word prose structure.
 
 Search budget (STRICT): AT MOST one `brave-search` `search.js` call per
 card and AT MOST one `content.js` fetch per card. If you have already

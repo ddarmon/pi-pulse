@@ -8,11 +8,12 @@ search/fetch path in expand (no built-in `web_search`/`web_fetch`);
 standalone HTML render via `sources/render_html.py` alongside the
 markdown brief; a hard prompt rule against `Write`/`Edit` on the output
 file (the model must emit the brief as final stdout text, since
-`pulse.sh` captures stdout); and pi-pulse repo sessions excluded from
-sesh collection via `collect_sesh.py --exclude-cwd` so the
-meta-recursion loop is broken. The pipeline runs end-to-end. Below is
-the remaining backlog in recommended order, plus context the next agent
-will need.
+`pulse.sh` captures stdout); pi-pulse repo sessions excluded from sesh
+collection via `collect_sesh.py --exclude-cwd` so the meta-recursion
+loop is broken; recent-pulses topic dedup; and follow-up cards as a
+narrow escape hatch when a deduped thread has fresh signal. The pipeline
+runs end-to-end. Below is the remaining backlog in recommended order,
+plus context the next agent will need.
 
 Read `CLAUDE.md` first for architecture, conventions, and cost
 awareness. This file picks up where that ends.
@@ -36,62 +37,7 @@ snapshot/diff pattern from `scripts/interview.sh` (snapshot to
 Cost: adds a fourth pi call per run. Gate behind an env var
 (`PI_PULSE_SUGGEST_PROFILE=1`) so the user opts in.
 
-### 2. Cross-Pulse topic awareness over a sliding window
-
-The existing dedup mechanism (`memory/seen_urls.jsonl`) operates at URL
-granularity: if today's expand surfaces a URL already in the ledger, the
-card finds another source or drops. Topic-level dedup is missing, so
-today's plan can re-pick a topic yesterday's brief already covered, just
-via a different primary source. The user wants two behaviors:
-
-1.  **Skip topics recently covered**, unless there is a substantive
-    update worth surfacing.
-2.  **When a topic does warrant expansion**, mark the card as a
-    follow-up to the previous Pulse rather than a fresh discovery.
-
-The first half is straightforward; the second half is the hard UX
-problem.
-
-Implementation sketch (the next session should refine this before
-coding):
-
--   Before the plan stage, build a `.tmp/recent_pulses.md` bundle by
-    walking the last N days of `out/YYYY-MM-DD.md` (default N=7,
-    configurable via `PI_PULSE_HISTORY_DAYS`). Keep just the H2 card
-    title lines plus the opening sentence of each card, so the bundle
-    stays small.
--   Pass `.tmp/recent_pulses.md` as a third input to the plan-stage `pi`
-    invocation alongside `interests_today.md` and `seen_urls.jsonl`.
--   Extend `prompts/compose_plan.md` with a rule: if a candidate topic
-    matches a card title in the recent-pulses bundle, drop it by
-    default. The plan MAY mark the topic as a follow-up to a specific
-    prior date only when the memo (or active-threads section) shows new
-    substantive ground worth covering; cap follow-ups at 1 per run so
-    they do not crowd out genuinely new topics.
--   At expand time, follow-up cards should open with a one-clause
-    callback ("Last week's Pulse covered X; the new ground is Y") rather
-    than re-explaining the original topic from scratch.
-
-UX failure modes to design against:
-
--   **Over-suppression.** A tracked thread (e.g. "Gemma 4 development")
-    that is genuinely evolving daily must not be permanently blocked by
-    a single past mention. The user's "Active threads" memo section is
-    the live signal; respect it over the recent-pulses bundle when they
-    conflict.
--   **Callback fatigue.** If every brief opens with "last week we
-    covered...", novelty collapses. The 1-per-run cap and the
-    "substantive new ground" gate are both load-bearing.
--   **Soft recency, not hard window.** A topic covered yesterday is much
-    more painful to repeat than one covered 30 days ago. Whatever
-    matching the plan does should prefer recent matches and gradually
-    tolerate older overlaps.
-
-Consider shipping the dedup half first (drop overlaps, no follow-up
-mechanism) and the expansion half second once the dedup is observably
-calibrated.
-
-### 3. Strict citation verify-then-include (defer)
+### 2. Strict citation verify-then-include (defer)
 
 After `expand`, fetch every URL in the brief. If 404, or if the page
 content doesn't mention the card's key claim (use a small
@@ -100,17 +46,55 @@ brief. Currently low priority: the user has audited the compose-stage
 URLs and they grounded honestly. Revisit if drift appears in future
 runs.
 
+## Recently shipped
+
+-   **Recent-pulses topic dedup (2a).** Plan stage receives
+    `.tmp/recent_pulses.md` (last 7 days of `out/*.md`, today excluded,
+    backup files filtered) and drops candidate topics that semantically
+    overlap. Bundle derives from markdown via
+    `sources/build_recent_pulses.py` -- no new ledger. Today is
+    intentionally excluded so the script is safe to re-run mid-day
+    without self-citing; this lives in the script's docstring and
+    `--days` help text. Configurable via `PI_PULSE_HISTORY_DAYS`
+    (default 7).
+-   **Follow-up cards (2b).** Up to one card per run (configurable via
+    `PI_PULSE_CARDS_FOLLOWUP`, default 1) may re-cover a
+    recently-shipped topic, but only when the memo's "Active threads" OR
+    "Open questions" section names a fresh signal -- a release, paper,
+    version bump, blog post, or named event dated within the
+    recent-pulses window. A follow-up consumes one tracked slot; if
+    TRACKED=5 and FOLLOWUP=1, the run emits at most 4 fresh tracked
+    cards plus 1 follow-up. The plan tags the card
+    `(follow-up of YYYY-MM-DD)` with extra `Prior coverage:` and
+    `New ground:` fields; expand renders the title as `(follow-up)` and
+    requires the first sentence to cite the prior date and state what's
+    new. Each bundle entry carries a `[YYYY-MM-DD]` prefix so the model
+    attributes the prior date accurately. First live run (2026-05-18
+    evening) correctly emitted zero follow-ups -- yesterday's brief
+    covered Gemma 4, Ollama MLX, and BitNet, but today's memo had no
+    fresh-signal bullet for any of them. The plan model demonstrably
+    consulted the bundle (one tracked card's rationale said "Yesterday
+    covered Gemma 4; this is the distinct hybrid-SSM lineage") and
+    routed to an adjacent thread rather than re-covering. No callback
+    fatigue yet because the gate hasn't fired.
+
 ## Known weaknesses to watch
 
-1.  **Topic-selection drift.** Before the plan/expand split, compose
-    skewed hard toward frontier AI regardless of memo content. The N/M/O
-    quotas appear to be working: the 2026-05-17 and 2026-05-18 runs both
-    shipped tracked/adjacent/bridge distributions that matched the plan,
-    modulo cards dropped at expand for lack of a fresh primary source
-    (4/8 dropped on the corrupted 05-17 run, 2/8 on 05-18). Keep
-    comparing future expand outputs against the plan; if drops exceed
-    \~25% consistently, consider whether plan-stage source plausibility
-    checks need to be tighter.
+1.  **Chronic 50% expand-stage drop rate.** Before the plan/expand
+    split, compose skewed hard toward frontier AI regardless of memo
+    content. The N/M/O quotas themselves now hold reliably. The
+    unresolved problem is the drop rate: across four recent runs (two
+    05-17 backups, two 05-18 runs), three shipped only 4 of 8 planned
+    cards (50%) and one shipped 6 of 8 (25%). The drops are honest --
+    the expand model is correctly refusing to write cards when no fresh
+    primary source surfaces -- but the plan model has no web access, so
+    it can't tell from a memo bullet whether a credible current source
+    actually exists. Likely fix lives in `prompts/compose_plan.md`:
+    require each card's rationale to name a plausible source class
+    (arXiv preprint, GitHub release, vendor blog within last N days) and
+    to reject topics where no such source plausibly exists in the
+    recency window. Worth promoting to a backlog item if the 50% pattern
+    persists for another run or two.
 
 2.  **Structural drift under prose pressure.** Original compose reliably
     dropped the labeled `**Follow-up:**` field; reshape to prose
@@ -148,17 +132,18 @@ runs.
     model to use `Write` (e.g. for post-hoc fixups), the pulse.sh
     redirect must change first; otherwise the race reappears silently.
 
-5.  **Wall time growth.** Original two-pi-call compose was \~30s.
-    Plan/expand split with per-card search budget put earlier runs at
-    5--7 min, but the 2026-05-18 run took \~25 min (distill 6.9 + plan
-    10.1 + expand 8.1). Distill showing 4x variance on similar input
-    volume (107K tokens vs 108s the prior day) suggests Ollama Cloud /
-    `kimi-k2.6:cloud` provider variance rather than a code regression,
-    but worth monitoring across the next several runs. If the slowdown
-    persists, profile the distill prompt and consider lowering the
-    per-stage budget or running on a faster model. Adding backlog task
-    #1 (profile auto-suggest) adds a fourth pi call and will push wall
-    time further.
+5.  **Wall time growth; plan stage is the new bottleneck.** Original
+    two-pi-call compose was \~30s. Plan/expand split with per-card
+    search budget put earlier runs at 5--7 min, but the 2026-05-18
+    morning run took \~25 min and the evening run \~22 min (distill
+    4.5 + plan 10.5 + expand 7.8). Plan is consistently slowest despite
+    a tiny input (\~870 char bundle); it generates \~15K output tokens
+    across 8 cards, which is the dominant cost. Distill variance
+    day-to-day suggests Ollama Cloud / `kimi-k2.6:cloud` provider
+    variance. If the slowdown persists, consider profiling the plan
+    prompt -- the per-card rationale fields may be doing more work than
+    they need to. Adding backlog task #1 (profile auto-suggest) adds a
+    fourth pi call and will push wall time further.
 
 6.  **Meta-recursion (mitigated 2026-05-18).** Before this fix, pi-pulse
     iteration conversations lived in the user's sesh index and fed
@@ -171,6 +156,19 @@ runs.
     pi-pulse iteration as a thread, check whether the relevant session's
     `project_path` is actually outside the repo (e.g. started from `~`
     and only later `cd`'d in).
+
+7.  **Follow-up regression risk.** If a follow-up card's `New ground:`
+    reads like restatement rather than new information, 2b is leaking
+    the duplication 2a was built to prevent. Watch the first several
+    runs that emit a follow-up; if more than \~1 in 3 reads as a
+    restatement, tighten the "fresh signal" gate in
+    `prompts/compose_plan.md` to require an explicit date or version
+    number in the memo bullet. Companion risk: **callback fatigue** --
+    if every brief opens with "last week's Pulse covered...", novelty
+    collapses. The 1-per-run cap and the prompt's "memo bullet must name
+    a fresh signal" gate are both load-bearing; loosening either
+    re-opens the original over-suppression vs. callback-fatigue
+    tradeoff.
 
 ## Gotchas learned in the first session
 

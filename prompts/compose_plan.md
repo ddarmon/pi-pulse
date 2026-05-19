@@ -11,6 +11,13 @@ Inputs (already attached):
 -   `memory/seen_urls.jsonl` -- URLs already surfaced in past briefs
     (may be empty). Avoid selecting a topic whose only credible source
     is likely on this list.
+-   `.tmp/recent_pulses.md` -- titles plus first-sentence excerpts of
+    cards shipped in recent briefs. Drop candidate topics that
+    semantically overlap with these UNLESS the topic qualifies as a
+    follow-up (see the Follow-up cards quota below). Each entry is
+    prefixed with `[YYYY-MM-DD]`; use that exact date when emitting a
+    follow-up tag. If the bundle says there are no prior pulses in the
+    window, treat that as no constraint.
 
 Quotas (fixed for this run):
 
@@ -25,6 +32,17 @@ Quotas (fixed for this run):
     post, or release. If the Study reinforcement section is empty or has
     nothing connectable, emit zero bridge cards and explain why in the
     rationale.
+-   **Follow-up cards: {{FOLLOWUP}}** (max; emit fewer if no topic
+    qualifies) -- topics already covered in `.tmp/recent_pulses.md`
+    that deserve re-coverage because the memo names a fresh signal. A
+    follow-up CONSUMES ONE TRACKED SLOT: if FOLLOWUP=1 and TRACKED=5,
+    you emit at most 4 fresh tracked cards plus 1 follow-up, totaling
+    5 tracked-category cards. A follow-up is allowed only when BOTH:
+    (a) the topic appears in the memo's "Active threads" OR "Open
+    questions" section, AND (b) that memo bullet names a fresh signal
+    -- a release, paper, version bump, blog post, or named event
+    dated within the recent-pulses window. If no memo bullet
+    satisfies both conditions, emit zero follow-ups. Do not pad.
 
 Output exactly this markdown shape. No preamble. No closing sign-off.
 Use today's date.
@@ -57,6 +75,15 @@ For a bridge card, replace `(tracked)` with `(bridge)` and add a
 final line:
 - **Bridge hypothesis:** <one sentence on what current source might
   exist that connects the leech to active work>
+
+For a follow-up card, replace `(tracked)` with
+`(follow-up of YYYY-MM-DD)` -- using the prior brief's exact date
+from `.tmp/recent_pulses.md` -- and add two extra lines after the
+rationale:
+- **Prior coverage:** <one-line summary of what the prior brief said
+  about this topic>
+- **New ground:** <one sentence on what is new since, anchored in the
+  memo bullet's fresh signal>
 ```
 
 Rules:
@@ -69,6 +96,13 @@ Rules:
 -   Diversify: do not select two cards on the same paper, library, or
     release. Spread across distinct memo bullets so the brief covers
     multiple threads.
+-   If a candidate topic semantically overlaps with a card title in
+    `.tmp/recent_pulses.md` -- same paper, release, named entity, or
+    technique at the same grain (not just a shared keyword) -- drop it
+    and pick a different memo bullet, UNLESS it qualifies as a
+    follow-up per the Follow-up cards quota. Nearer dates are stricter
+    matches; a topic from yesterday is much worse to repeat than one
+    from 6 days ago, even as a follow-up.
 -   For each tracked card, prefer bullets you can imagine a current
     primary source for (release notes, arXiv paper, GitHub release,
     author blog). If a thread is interesting but no plausible fresh
