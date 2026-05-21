@@ -4,16 +4,20 @@ Handoff doc for the next agent picking up pi-pulse work. The implemented
 iterations are: observability + sesh isolation; mini-essay prose;
 plan/expand split with N/M/O quotas; sesh auto-refresh; on-demand
 profile interview at `scripts/interview.sh`; brave-search as the sole
-search/fetch path in expand (no built-in `web_search`/`web_fetch`);
+search/fetch path (no built-in `web_search`/`web_fetch`);
 standalone HTML render via `sources/render_html.py` alongside the
 markdown brief; a hard prompt rule against `Write`/`Edit` on the output
 file (the model must emit the brief as final stdout text, since
 `pulse.sh` captures stdout); pi-pulse repo sessions excluded from sesh
 collection via `collect_sesh.py --exclude-cwd` so the meta-recursion
-loop is broken; recent-pulses topic dedup; and follow-up cards as a
-narrow escape hatch when a deduped thread has fresh signal. The pipeline
-runs end-to-end. Below is the remaining backlog in recommended order,
-plus context the next agent will need.
+loop is broken; recent-pulses topic dedup; follow-up cards as a
+narrow escape hatch when a deduped thread has fresh signal; and
+**source-first pipeline** with a new `scout` stage that probes
+`brave-search` per interest cluster before plan picks, plus per-card
+parallel expand bounded by `PI_PULSE_EXPAND_PARALLEL`. Card quotas are
+now caps, not targets. The pipeline runs end-to-end. Below is the
+remaining backlog in recommended order, plus context the next agent
+will need.
 
 Read `CLAUDE.md` first for architecture, conventions, and cost
 awareness. This file picks up where that ends.
@@ -34,19 +38,50 @@ lets the user accept or reject each suggestion individually, reusing the
 snapshot/diff pattern from `scripts/interview.sh` (snapshot to
 `memory/interests-history/YYYY-MM-DD-HHMM.md` before any write).
 
-Cost: adds a fourth pi call per run. Gate behind an env var
-(`PI_PULSE_SUGGEST_PROFILE=1`) so the user opts in.
+Cost: adds one more pi call per run. The pipeline already runs `3 + N`
+pi calls (distill, scout, plan, one per parallel expand slot) under the
+unlimited-Ollama operating assumption, so an extra serial call is
+cheap. Still gate behind an env var (`PI_PULSE_SUGGEST_PROFILE=1`) so
+the user opts in; auto-applying profile edits would be a trust step
+the user hasn't taken yet.
 
 ### 2. Strict citation verify-then-include (defer)
 
-After `expand`, fetch every URL in the brief. If 404, or if the page
-content doesn't mention the card's key claim (use a small
-model-as-judge), drop the card and note the drop at the bottom of the
-brief. Currently low priority: the user has audited the compose-stage
-URLs and they grounded honestly. Revisit if drift appears in future
-runs.
+Scout now commits every card's `Source URL` upstream, and expand's
+first action is a `content.js` fetch on that committed URL -- so URL
+fabrication is structurally unlikely (see "Recently shipped: source-
+first pipeline" below). The remaining risk is **claim drift**: the
+fetched page is real but the card's claim about it isn't supported by
+what was fetched. A model-as-judge pass after expand could catch this
+(read card body + content.js result, flag mismatches), but no live
+case has surfaced yet. Revisit if a future audit finds a card whose
+URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
+
+-   **Source-first pipeline (2026-05-21).** Replaced the
+    distill→plan→expand contract with distill→scout→plan→expand, where
+    `scout` (new pi call, `prompts/scout_signals.md`) probes
+    `brave-search` per interest cluster and writes a structured
+    `.tmp/signals.md` with `url`/`published`/`source_class`/`gloss`/
+    `memo_anchor`/`relation`. Plan is now a ranker: each card slot
+    must cite a signal `url` verbatim, and quotas became *caps* rather
+    than targets. Expand was decomposed into per-card parallel pi
+    calls (`sources/split_plan.py` writes per-slot files,
+    `sources/expand_slot.sh` is invoked by `xargs -P
+    $PI_PULSE_EXPAND_PARALLEL`); each slot fetches its committed
+    Source URL via `content.js` and falls back to one `search.js`
+    only if the fetch 404s. Drops go to stderr as `DROPPED slot=NN
+    reason=...` and are aggregated into `logs/YYYY-MM-DD/dropped.md`
+    -- never into the delivered brief. First live run measured 0/4
+    drops (down from 5/8 = 62.5% on the morning baseline) with every
+    card carrying a verifiable scout-discovered URL. Wall time
+    ~10 min (distill 49s + scout 331s + plan 73s + parallel expand
+    ~120s). Plan's output-saturation issue resolved as a side effect
+    (7k tokens vs 16,384 cap) because plan's job shrank to mechanical
+    ranking. New env vars: `PI_PULSE_SCOUT_MAX_INTERESTS` (default
+    12), `PI_PULSE_SCOUT_QUERIES_PER_INTEREST` (default 2),
+    `PI_PULSE_EXPAND_PARALLEL` (default 4).
 
 -   **Recent-pulses topic dedup (2a).** Plan stage receives
     `.tmp/recent_pulses.md` (last 7 days of `out/*.md`, today excluded,
@@ -80,21 +115,16 @@ runs.
 
 ## Known weaknesses to watch
 
-1.  **Chronic 50% expand-stage drop rate.** Before the plan/expand
-    split, compose skewed hard toward frontier AI regardless of memo
-    content. The N/M/O quotas themselves now hold reliably. The
-    unresolved problem is the drop rate: across four recent runs (two
-    05-17 backups, two 05-18 runs), three shipped only 4 of 8 planned
-    cards (50%) and one shipped 6 of 8 (25%). The drops are honest --
-    the expand model is correctly refusing to write cards when no fresh
-    primary source surfaces -- but the plan model has no web access, so
-    it can't tell from a memo bullet whether a credible current source
-    actually exists. Likely fix lives in `prompts/compose_plan.md`:
-    require each card's rationale to name a plausible source class
-    (arXiv preprint, GitHub release, vendor blog within last N days) and
-    to reject topics where no such source plausibly exists in the
-    recency window. Worth promoting to a backlog item if the 50% pattern
-    persists for another run or two.
+1.  **Drop rate (RESOLVED 2026-05-21 by source-first pipeline).** Was
+    chronic 50% (sometimes 62.5%) under the old distill→plan→expand
+    contract: plan picked topics speculatively, expand discovered the
+    absence of fresh sources too late and dropped cards. Resolved by
+    inserting the scout stage so plan picks only from grounded
+    candidates. First live run: 0/4 drops. Watch the next several
+    runs to confirm the rate stays at or near zero. If drops creep
+    back up, look first at scout's source-class judgement (is it
+    accepting aggregator URLs?) and at signal freshness criteria in
+    `prompts/scout_signals.md`.
 
 2.  **Structural drift under prose pressure.** Original compose reliably
     dropped the labeled `**Follow-up:**` field; reshape to prose
@@ -132,18 +162,17 @@ runs.
     model to use `Write` (e.g. for post-hoc fixups), the pulse.sh
     redirect must change first; otherwise the race reappears silently.
 
-5.  **Wall time growth; plan stage is the new bottleneck.** Original
-    two-pi-call compose was \~30s. Plan/expand split with per-card
-    search budget put earlier runs at 5--7 min, but the 2026-05-18
-    morning run took \~25 min and the evening run \~22 min (distill
-    4.5 + plan 10.5 + expand 7.8). Plan is consistently slowest despite
-    a tiny input (\~870 char bundle); it generates \~15K output tokens
-    across 8 cards, which is the dominant cost. Distill variance
-    day-to-day suggests Ollama Cloud / `kimi-k2.6:cloud` provider
-    variance. If the slowdown persists, consider profiling the plan
-    prompt -- the per-card rationale fields may be doing more work than
-    they need to. Adding backlog task #1 (profile auto-suggest) adds a
-    fourth pi call and will push wall time further.
+5.  **Wall time; scout is the new bottleneck.** Source-first pipeline
+    runs in ~10 min (first live run: distill 49s + scout 331s + plan
+    73s + parallel expand ~120s). Scout is now the longest leg
+    because it runs `M*K` brave-search queries (default 12 interests
+    \* 2 queries = up to 24 search.js calls) serially within one pi
+    session. If scout wall time becomes a problem, the natural fix is
+    to parallelize *within* scout (one pi sub-session per interest
+    cluster) the same way expand was parallelized -- but only if it
+    matters. Per-card expand parallelism keeps total time bounded by
+    `max(per-card)` rather than the sum, so adding cards is cheap
+    until you hit `PI_PULSE_EXPAND_PARALLEL` saturation.
 
 6.  **Meta-recursion (mitigated 2026-05-18).** Before this fix, pi-pulse
     iteration conversations lived in the user's sesh index and fed
@@ -198,10 +227,11 @@ runs.
     render step (`sources/render_html.py`) reads the markdown after pi
     exits, so it isn't affected by the redirect.
 
--   **Don't run `pulse.sh` casually.** Three pi calls, 5--25 min, spends
-    real Ollama Cloud tokens (currently free but that may change). The
-    user explicitly invokes it; don't trigger it as a "test" without
-    asking.
+-   **Don't run `pulse.sh` casually.** `3 + N` pi calls (where N is
+    the planned card count, default cap 8), ~10 min, spends real
+    Ollama Cloud tokens (currently unlimited per the user's
+    subscription but that may change). The user explicitly invokes
+    it; don't trigger it as a "test" without asking.
 
 -   **`BRAVE_API_KEY` and launchd inheritance.** Expand depends on
     `BRAVE_API_KEY`. launchd does NOT inherit `~/.zprofile` or

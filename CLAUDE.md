@@ -6,25 +6,50 @@ private at github.com/ddarmon/pi-pulse.
 
 ## Pipeline
 
-Five stages, three pi calls:
+Source-first: six stages, `3 + N` pi calls where N is the number of
+card slots that survive plan. Plan picks from real evidence (scout's
+discovered URLs), not imagined sources, so cards rarely drop in expand.
 
 1.  **collect** -- `sources/collect_{obsidian,sesh,anki}.py` populate
     `.tmp/{chats,sesh,anki_signals}_recent.md`.
+    `sources/build_recent_pulses.py` writes `.tmp/recent_pulses.md`
+    (scout and plan both read it).
 2.  **distill** -- `pi -p prompts/distill_context.md --no-skills` reads
     the three input bundles plus `memory/interests.md` and produces a
     five-section memo at `.tmp/interests_today.md` (Active threads, Open
     questions, Persistent interests, Study reinforcement, Avoid).
-3.  **plan** -- `pi -p prompts/compose_plan.md --no-skills` picks
-    exactly `PI_PULSE_CARDS_{TRACKED,ADJACENT,BRIDGE}` topics from the
-    memo into `.tmp/plan.md` (default 5/2/1 = 8 cards).
-4.  **expand** -- `pi -p prompts/compose_expand.md` writes one 250--400
-    word prose card per planned topic into `out/YYYY-MM-DD.md`. Search
-    is done via the `brave-search` skill (`search.js` for queries,
-    `content.js` for fetches); the built-in `web_search` and `web_fetch`
-    tools are explicitly forbidden in the prompt because their results
-    are unbounded in size and have overflowed context before. Budget: at
-    most one `search.js` + one `content.js` per card.
-5.  **deliver** -- append URLs to `memory/seen_urls.jsonl`; render
+3.  **scout** -- `pi -p prompts/scout_signals.md` runs broad
+    `brave-search` queries per interest cluster (memo bullets +
+    durable-profile candidates from `interests.md`) and writes a
+    structured signal sheet at `.tmp/signals.md`: one entry per fresh
+    primary source with `url`, `published`, `source_class`, `gloss`,
+    `memo_anchor`, and `relation`
+    (`memo-anchored` / `profile-adjacent` / `study-bridge`). Bounded
+    by `PI_PULSE_SCOUT_MAX_INTERESTS` (default 12) and
+    `PI_PULSE_SCOUT_QUERIES_PER_INTEREST` (default 2). Aggregator
+    results (HN, Reddit, Twitter, link blogs) are rejected. URLs in
+    `memory/seen_urls.jsonl` are filtered out here.
+4.  **plan** -- `pi -p prompts/compose_plan.md --no-skills` ranks
+    scout signals into card slots. Each slot's `Source URL:` is
+    copied verbatim from `.tmp/signals.md` -- plan never invents URLs
+    or topics. `PI_PULSE_CARDS_{TRACKED,ADJACENT,BRIDGE,FOLLOWUP}` are
+    CAPS, not targets: on slow signal days the brief shrinks rather
+    than padding. Default caps 5/2/1/1.
+5.  **expand** -- `sources/split_plan.py` writes one
+    `.tmp/expand/NN/slot.md` per planned card; `sources/expand_slot.sh`
+    is invoked once per slot via `xargs -P
+    $PI_PULSE_EXPAND_PARALLEL` (default 4). Each per-slot
+    `pi -p prompts/compose_expand.md` fetches the committed Source URL
+    via `brave-search` `content.js` (one fetch budgeted; one fallback
+    `search.js` allowed only if the fetch 404s), then writes 250--400
+    words of prose to `.tmp/expand/NN/body.md`. The built-in
+    `web_search`/`web_fetch` tools are forbidden -- their results are
+    unbounded and have overflowed context before. Drops are reported
+    on stderr (`DROPPED slot=NN reason=...`) and aggregated into
+    `logs/YYYY-MM-DD/dropped.md` -- never into the delivered brief.
+6.  **deliver** -- stitch `.tmp/expand/theme.md` (lifted from plan)
+    with each non-empty per-slot body into `out/YYYY-MM-DD.md`;
+    append URLs to `memory/seen_urls.jsonl`; render
     `out/YYYY-MM-DD.html` from the markdown via `sources/render_html.py`
     (pandoc preferred, Python `markdown` fallback, MathJax loaded only
     when math is detected); copy both `.md` and `.html` to
@@ -32,10 +57,14 @@ Five stages, three pi calls:
 
 ## Cost and runtime awareness
 
-A full `./pulse.sh` run takes 5--7 min and makes three pi calls against
-`kimi-k2.6:cloud` (currently free on Ollama Cloud; the budget matters if
-the provider changes). **Do not run pulse.sh speculatively** -- only
-when the user explicitly asks for a test run.
+A full `./pulse.sh` run takes roughly 8--12 min and makes `3 + N` pi
+calls against `kimi-k2.6:cloud`, where N is the planned card count
+(default cap 8). Per-card expand calls run in parallel
+(`PI_PULSE_EXPAND_PARALLEL`, default 4), so wall time scales with
+`max(per-card)`, not the sum. Operating assumption: unlimited Ollama
+subscription, so the call count is not budgeted. **Reintroduce a hard
+budget if the provider changes.** **Do not run pulse.sh speculatively**
+-- only when the user explicitly asks for a test run.
 
 ## Conventions
 
@@ -47,9 +76,17 @@ when the user explicitly asks for a test run.
     `memory/seen_urls.jsonl`, `out/`, `logs/`, `.pulse-sessions/`,
     `.env`, and `memory/interests.md.local` are all gitignored. The
     `.example` and `.template` counterparts are committed.
--   **Three-call budget.** `pulse.sh` invokes `pi` exactly three times
-    (distill, plan, expand). Anything that wants to add a fourth call
-    (e.g. profile auto-suggest) should be opt-in via env var.
+-   **Pi-call count is variable.** `pulse.sh` invokes `pi` for distill,
+    scout, plan, and once per planned card slot in parallel expand
+    (capped by `PI_PULSE_EXPAND_PARALLEL`). This is the source-first
+    pipeline; it relies on an unlimited Ollama subscription. If the
+    provider changes, reintroduce a hard call budget in `pulse.sh`.
+-   **Card quotas are caps, not targets.** Plan emits fewer cards
+    when scout returns fewer grounded signals. A short, fully grounded
+    brief is the goal -- never invent a topic to fill a slot.
+-   **Drop info lives in logs only.** `logs/YYYY-MM-DD/dropped.md`
+    captures per-slot drops; the delivered brief in `out/` never
+    contains a `## Dropped from this run` section.
 -   **Commit messages.** Imperative subject, body explains motivation
     and surfaces what evidence drove the change. No `Co-Authored-By`
     lines (per global CLAUDE.md). No emoji.
@@ -58,12 +95,20 @@ when the user explicitly asks for a test run.
 
 -   `logs/YYYY-MM-DD/summary.md` -- per-stage wall time, tokens, tool
     calls, web-search queries, deduped URL list. Always read this first.
--   `logs/YYYY-MM-DD/{distill,plan,expand}.log.md` -- per-stage detail.
+-   `logs/YYYY-MM-DD/{distill,scout,plan,expand}.log.md` -- per-stage
+    detail. `expand.log.md` concatenates per-slot session digests.
+-   `logs/YYYY-MM-DD/dropped.md` -- which expand slots dropped and why
+    (empty `(none)` on a clean run).
 -   `logs/YYYY-MM-DD/*.err` -- raw stderr from each subprocess.
--   `.pulse-sessions/YYYY-MM-DD/{distill,plan,expand}/` -- full pi
-    session JSONLs. Parse with `sources/inspect_session.py`.
--   `pulse.sh` exits 1 if any stage produces a 0-byte output, with logs
-    preserved.
+-   `.pulse-sessions/YYYY-MM-DD/{distill,scout,plan,expand}/` -- full
+    pi session JSONLs. Parse with `sources/inspect_session.py`. Expand
+    has one subdirectory per slot (`expand/01/`, `expand/02/`, ...).
+-   `.tmp/signals.md` -- scout's structured signal sheet (the candidate
+    pool plan picks from).
+-   `.tmp/expand/NN/{slot.md,body.md,err.log}` -- per-slot plan
+    fragment, card body, and stderr (including any `DROPPED` line).
+-   `pulse.sh` exits 1 if distill, scout, or plan produces 0-byte
+    output, or if every expand slot drops. Logs are preserved.
 
 ## Known constraints
 
