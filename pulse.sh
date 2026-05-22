@@ -18,11 +18,17 @@
 # Card quotas are CAPS, not targets: on slow signal days the brief
 # shrinks rather than padding. ChatGPT Pulse parity.
 #
-# Sessions for every pi call are routed to .pulse-sessions/YYYY-MM-DD/
+# Each invocation owns a RUN_ID of the form YYYY-MM-DD-HHMM. Output,
+# logs, and session archives are keyed on RUN_ID so multiple pulses can
+# run on the same day without clobbering each other. The shared scratch
+# dir .tmp/ is guarded by a lockfile (.tmp/.pulse.lock) so concurrent
+# runs fail fast.
+#
+# Sessions for every pi call are routed to .pulse-sessions/${RUN_ID}/
 # (gitignored) so they do NOT pollute ~/.pi/agent/sessions/ and never
 # feed tomorrow's distill via sesh discovery.
 #
-# Per-run logs land in logs/YYYY-MM-DD/:
+# Per-run logs land in logs/${RUN_ID}/:
 #   distill.log.md  scout.log.md  plan.log.md  expand.log.md
 #   dropped.md  summary.md  *.err
 #
@@ -30,6 +36,8 @@
 #   PI_PULSE_NOTES_DIR        Directory tree of YYYY/MM/DD/*.md notes
 #   PI_PULSE_DELIVERY         Directory to copy the daily brief into
 #   PI_PULSE_ANKI_SEARCH      Path to anki_search.py (optional)
+#   PI_PULSE_RUN_ID           Override the run identifier (default:
+#                             current date-time as YYYY-MM-DD-HHMM)
 #   PI_PROVIDER               Pi provider (default: ollama)
 #   PI_MODEL                  Pi model    (default: kimi-k2.6:cloud)
 #   PI_PULSE_NOTES_SINCE      Days of notes history (default: 30)
@@ -55,10 +63,13 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-TODAY=$(date +%F)
-OUT="out/${TODAY}.md"
-SESSION_DIR=".pulse-sessions/${TODAY}"
-LOG_DIR="logs/${TODAY}"
+DATE=$(date +%F)
+TIME=$(date +%H%M)
+RUN_ID="${PI_PULSE_RUN_ID:-${DATE}-${TIME}}"
+OUT="out/${RUN_ID}.md"
+SESSION_DIR=".pulse-sessions/${RUN_ID}"
+LOG_DIR="logs/${RUN_ID}"
+export RUN_ID
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
 PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
 NOTES_SINCE="${PI_PULSE_NOTES_SINCE:-30}"
@@ -82,6 +93,22 @@ if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
 fi
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+
+# Lockfile: .tmp/ is shared scratch and would corrupt under concurrent
+# runs. mkdir is atomic; if it fails, surface the holder's PID/RUN_ID
+# and bail. The trap clears the lock on any exit (success, error, signal).
+LOCK_DIR=".tmp/.pulse.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  held=""
+  if [[ -f "$LOCK_DIR/info" ]]; then
+    held=" (held by $(cat "$LOCK_DIR/info"))"
+  fi
+  echo "ERROR: another pulse.sh run is in progress${held}." >&2
+  echo "       Remove $LOCK_DIR if you are sure no run is active." >&2
+  exit 1
+fi
+trap 'rm -rf "$LOCK_DIR"' EXIT
+echo "pid=$$ run_id=${RUN_ID} started=$(date -Iseconds)" > "$LOCK_DIR/info"
 
 # Find the newest .jsonl under a directory (recursive).
 newest_session() {
@@ -109,8 +136,11 @@ log "collecting anki signals"
 uv run sources/collect_anki.py                            > .tmp/anki_signals.md 2>"$LOG_DIR/collect-anki.err" || true
 
 # 1b. Build recent-pulses bundle (scout and plan both consume this).
-log "building recent-pulses bundle (${HISTORY_DAYS}d, today excluded)"
+# --exclude-stem skips this run's own brief if one already exists from a
+# retry with the same PI_PULSE_RUN_ID, so we never self-cite.
+log "building recent-pulses bundle (${HISTORY_DAYS}d, today included)"
 uv run sources/build_recent_pulses.py --days "$HISTORY_DAYS" \
+   --exclude-stem "$RUN_ID" \
    > .tmp/recent_pulses.md \
    2>"$LOG_DIR/build-recent.err"
 
@@ -224,8 +254,12 @@ while IFS=$'\t' read -r slot_id _slot_tag; do
 done < "$MANIFEST_FILE"
 
 # 5b. Stitch theme + per-slot bodies into the delivered brief.
+# theme.md ends with the lede paragraph + a single newline; without an
+# extra blank line, markdown renderers merge the first `## ...` heading
+# into the lede paragraph as plain text.
 {
   cat .tmp/expand/theme.md
+  echo
   while IFS=$'\t' read -r slot_id _slot_tag; do
     body=".tmp/expand/$slot_id/body.md"
     if [[ -s "$body" ]]; then
@@ -238,7 +272,7 @@ done < "$MANIFEST_FILE"
 # 5c. Aggregate dropped slots into logs (never into the delivered brief).
 dropped_count=0
 {
-  echo "# Dropped slots ${TODAY}"
+  echo "# Dropped slots ${RUN_ID}"
   echo
   while IFS=$'\t' read -r slot_id slot_tag; do
     body=".tmp/expand/$slot_id/body.md"
@@ -263,11 +297,11 @@ log "expand drops: ${dropped_count}/${SLOT_COUNT}"
 
 # 6. Aggregate summary
 {
-  echo "# pi-pulse run ${TODAY}"
+  echo "# pi-pulse run ${RUN_ID}"
   echo
   echo "- brief: \`${OUT}\`"
   if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
-    echo "- delivery: \`${PI_PULSE_DELIVERY}/${TODAY}.md\`"
+    echo "- delivery: \`${PI_PULSE_DELIVERY}/${RUN_ID}.md\`"
   fi
   echo "- session archive: \`${SESSION_DIR}/\`"
   echo "- card caps: tracked=${TRACKED} adjacent=${ADJACENT} bridge=${BRIDGE} followup=${FOLLOWUP}"
@@ -300,9 +334,9 @@ fi
 
 if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
   log "copying brief to $PI_PULSE_DELIVERY"
-  cp "$OUT" "$PI_PULSE_DELIVERY/${TODAY}.md"
+  cp "$OUT" "$PI_PULSE_DELIVERY/${RUN_ID}.md"
   if [[ -n "$OUT_HTML" && -f "$OUT_HTML" ]]; then
-    cp "$OUT_HTML" "$PI_PULSE_DELIVERY/${TODAY}.html"
+    cp "$OUT_HTML" "$PI_PULSE_DELIVERY/${RUN_ID}.html"
   fi
 fi
 

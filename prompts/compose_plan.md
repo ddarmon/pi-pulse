@@ -18,12 +18,15 @@ Inputs (already attached):
     Scout has already filtered these out, but double-check: never emit
     a card whose `Source URL` appears here.
 -   `.tmp/recent_pulses.md` -- titles plus first-sentence excerpts of
-    cards shipped in recent briefs. Drop candidate signals whose topic
-    semantically overlaps with these UNLESS the signal qualifies as a
-    follow-up (see the Follow-up cards quota below). Each entry is
-    prefixed with `[YYYY-MM-DD]`; use that exact date when emitting a
-    follow-up tag. If the bundle says there are no prior pulses in
-    the window, treat that as no constraint.
+    cards shipped in recent briefs, including any earlier briefs from
+    today. Drop candidate signals whose topic semantically overlaps
+    with these UNLESS the signal qualifies as a follow-up (see the
+    Follow-up cards quota below). Each entry is prefixed with
+    `[STEM]`, where STEM is the prior brief's filename stem
+    (`YYYY-MM-DD` for legacy single-pulse-per-day briefs,
+    `YYYY-MM-DD-HHMM` for multi-pulse briefs); copy STEM verbatim
+    when emitting a follow-up tag. If the bundle says there are no
+    prior pulses in the window, treat that as no constraint.
 
 Quotas are CAPS, not targets (this is a change from prior runs):
 
@@ -41,8 +44,10 @@ Quotas are CAPS, not targets (this is a change from prior runs):
     (a) its `memo_anchor` references the memo's "Active threads" OR
     "Open questions", AND (b) a card on the same topic appears in
     `.tmp/recent_pulses.md` (semantic overlap, not just keyword), AND
-    (c) the signal's `published` date is newer than that prior card's
-    bracketed date. If no signal satisfies all three, emit zero
+    (c) the signal's `published` date is newer than the prior card's
+    date (parse the leading `YYYY-MM-DD` of its bracketed STEM). An
+    earlier brief from the same calendar day is fair game as the
+    prior coverage. If no signal satisfies all three, emit zero
     follow-ups.
 
 If the signal sheet does not contain enough qualifying entries to
@@ -87,9 +92,10 @@ final line:
   the study leech to active work>
 
 For a follow-up card, replace `(tracked)` with
-`(follow-up of YYYY-MM-DD)` -- using the prior brief's exact date
-from `.tmp/recent_pulses.md` -- and add two extra lines after the
-rationale:
+`(follow-up of STEM)` -- using the prior brief's exact bracketed
+stem from `.tmp/recent_pulses.md` (e.g. `(follow-up of 2026-05-11)`
+or `(follow-up of 2026-05-21-0530)`) -- and add two extra lines
+after the rationale:
 - **Prior coverage:** <one-line summary of what the prior brief said
   about this topic>
 - **New ground:** <one sentence on what is new since, anchored in
@@ -110,8 +116,8 @@ Rules:
     technique at the same grain (not just a shared keyword) -- drop
     it and pick a different signal, UNLESS it qualifies as a
     follow-up per the Follow-up cards quota.
--   Use today's date for the `# Plan` heading and for any
-    `(follow-up of YYYY-MM-DD)` tag (the follow-up date is the prior
-    brief's date from recent_pulses.md, not today's).
+-   Use today's date for the `# Plan` heading. The
+    `(follow-up of STEM)` tag carries the prior brief's exact stem
+    from recent_pulses.md, not today's.
 -   You have no tools in this stage -- you cannot search the web or
     fetch URLs. Plan from the signal sheet only.

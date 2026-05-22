@@ -46,15 +46,19 @@ Process. For this one card:
         change to make.
 5.  Card title: `## Title sentence-case`. For adjacent cards, append
     `(adjacent)` to the title. For the bridge card, append `(bridge)`.
-    For a follow-up card (plan tag `(follow-up of YYYY-MM-DD)`),
-    append only `(follow-up)` to the title -- the prior date lives
-    in the opening sentence (see next step), not the heading.
-6.  If the plan tagged this card `(follow-up of YYYY-MM-DD)`, the
-    card's first sentence must name that prior date and state what
-    is new since -- e.g. "The 2026-05-11 Pulse covered Gemma 4's
-    dual-RoPE base scaling; this week's release notes add explicit
-    per-layer embedding injection formulas." The plan's
-    `Prior coverage:` and `New ground:` fields are inputs for
+    For a follow-up card (plan tag `(follow-up of STEM)`), append
+    only `(follow-up)` to the title -- the prior brief reference
+    lives in the opening sentence (see next step), not the heading.
+6.  If the plan tagged this card `(follow-up of STEM)`, the card's
+    first sentence must reference that prior brief and state what is
+    new since. STEM is the prior brief's filename stem: a date
+    (`2026-05-11`) for a legacy brief, or a date+time
+    (`2026-05-21-0530`) for an earlier same-day or recent multi-pulse
+    brief. Phrase it naturally -- e.g. "The 2026-05-11 Pulse covered
+    Gemma 4's dual-RoPE base scaling; this week's release notes add
+    explicit per-layer embedding injection formulas." or "This
+    morning's 05:30 Pulse flagged X; the 14:00 release adds Y." The
+    plan's `Prior coverage:` and `New ground:` fields are inputs for
     shaping that sentence; do not paste them verbatim.
 
 Search budget (STRICT): AT MOST one `content.js` fetch (on the
@@ -72,7 +76,7 @@ DROPPED slot=<slot_id> reason=<short phrase, no commas>
 ```
 
 Do NOT write a `## Dropped from this run` section in stdout. The
-pipeline aggregates drops into `logs/YYYY-MM-DD/dropped.md`
+pipeline aggregates drops into `logs/<RUN_ID>/dropped.md`
 separately; the delivered brief never surfaces them.
 
 Typography:

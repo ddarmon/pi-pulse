@@ -46,14 +46,14 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     `web_search`/`web_fetch` tools are forbidden -- their results are
     unbounded and have overflowed context before. Drops are reported
     on stderr (`DROPPED slot=NN reason=...`) and aggregated into
-    `logs/YYYY-MM-DD/dropped.md` -- never into the delivered brief.
+    `logs/${RUN_ID}/dropped.md` -- never into the delivered brief.
 6.  **deliver** -- stitch `.tmp/expand/theme.md` (lifted from plan)
-    with each non-empty per-slot body into `out/YYYY-MM-DD.md`;
-    append URLs to `memory/seen_urls.jsonl`; render
-    `out/YYYY-MM-DD.html` from the markdown via `sources/render_html.py`
-    (pandoc preferred, Python `markdown` fallback, MathJax loaded only
-    when math is detected); copy both `.md` and `.html` to
-    `$PI_PULSE_DELIVERY` if set.
+    with each non-empty per-slot body into `out/${RUN_ID}.md`
+    (where `RUN_ID` is `YYYY-MM-DD-HHMM`); append URLs to
+    `memory/seen_urls.jsonl`; render `out/${RUN_ID}.html` from the
+    markdown via `sources/render_html.py` (pandoc preferred, Python
+    `markdown` fallback, MathJax loaded only when math is detected);
+    copy both `.md` and `.html` to `$PI_PULSE_DELIVERY` if set.
 
 ## Cost and runtime awareness
 
@@ -84,7 +84,16 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 -   **Card quotas are caps, not targets.** Plan emits fewer cards
     when scout returns fewer grounded signals. A short, fully grounded
     brief is the goal -- never invent a topic to fill a slot.
--   **Drop info lives in logs only.** `logs/YYYY-MM-DD/dropped.md`
+-   **One RUN_ID per invocation.** Every `pulse.sh` run owns a
+    `RUN_ID` of the form `YYYY-MM-DD-HHMM` (set from the wall clock,
+    or overridden via `PI_PULSE_RUN_ID` for backfill or retry).
+    Output, logs, and session archives are all keyed on `RUN_ID`,
+    so multiple pulses can land on the same day without clobbering
+    each other. `.tmp/` is shared scratch; the lockfile
+    `.tmp/.pulse.lock` rejects concurrent runs. Legacy briefs named
+    `YYYY-MM-DD.md` (pre-RUN_ID) are still picked up by
+    `build_recent_pulses.py`.
+-   **Drop info lives in logs only.** `logs/${RUN_ID}/dropped.md`
     captures per-slot drops; the delivered brief in `out/` never
     contains a `## Dropped from this run` section.
 -   **Commit messages.** Imperative subject, body explains motivation
@@ -93,14 +102,14 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 
 ## Debugging a run
 
--   `logs/YYYY-MM-DD/summary.md` -- per-stage wall time, tokens, tool
+-   `logs/${RUN_ID}/summary.md` -- per-stage wall time, tokens, tool
     calls, web-search queries, deduped URL list. Always read this first.
--   `logs/YYYY-MM-DD/{distill,scout,plan,expand}.log.md` -- per-stage
+-   `logs/${RUN_ID}/{distill,scout,plan,expand}.log.md` -- per-stage
     detail. `expand.log.md` concatenates per-slot session digests.
--   `logs/YYYY-MM-DD/dropped.md` -- which expand slots dropped and why
+-   `logs/${RUN_ID}/dropped.md` -- which expand slots dropped and why
     (empty `(none)` on a clean run).
--   `logs/YYYY-MM-DD/*.err` -- raw stderr from each subprocess.
--   `.pulse-sessions/YYYY-MM-DD/{distill,scout,plan,expand}/` -- full
+-   `logs/${RUN_ID}/*.err` -- raw stderr from each subprocess.
+-   `.pulse-sessions/${RUN_ID}/{distill,scout,plan,expand}/` -- full
     pi session JSONLs. Parse with `sources/inspect_session.py`. Expand
     has one subdirectory per slot (`expand/01/`, `expand/02/`, ...).
 -   `.tmp/signals.md` -- scout's structured signal sheet (the candidate

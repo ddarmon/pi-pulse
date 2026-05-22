@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Build a compact bundle of recently shipped Pulse cards for the plan stage.
 
-Walks out/YYYY-MM-DD.md for the last --days N days (today excluded),
-extracts each card's H2 title and first sentence (with markdown link
-syntax stripped to anchor text), and emits one section per date, newest
-first. Skips the H1 (`# Pulse ...`) and the `## Dropped from this run`
-section. The plan prompt consumes this bundle to drop candidate topics
-that semantically overlap with recent briefs; URL-level dedup is
-handled separately by memory/seen_urls.jsonl.
+Walks out/ for briefs from the last --days N days (today included),
+matching both legacy `YYYY-MM-DD.md` and multi-pulse `YYYY-MM-DD-HHMM.md`
+filenames. Extracts each card's H2 title and first sentence (with
+markdown link syntax stripped to anchor text), and emits one bullet
+per brief, newest first. The current run's own stem can be passed via
+--exclude-stem so a retry does not self-cite a prior partial brief.
+Skips each brief's H1 (`# Pulse ...`) and any `## Dropped from this
+run` section. The plan prompt consumes this bundle to drop candidate
+topics that semantically overlap with recent briefs; URL-level dedup
+is handled separately by memory/seen_urls.jsonl.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-FILENAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}\.md")
+FILENAME_RE = re.compile(r"\d{4}-\d{2}-\d{2}(?:-\d{4})?\.md")
 H2_RE = re.compile(r"^## (.+?)\s*$")
 TAG_RE = re.compile(r"\s*\((adjacent|bridge|follow-up)\)\s*$")
 LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
@@ -82,14 +85,19 @@ def clean_title(raw: str) -> str:
     return TAG_RE.sub("", raw).strip()
 
 
-def render_section(d: date, entries: list[tuple[str, str]]) -> str:
-    iso = d.isoformat()
-    lines = [f"## {iso}", ""]
+def render_section(stem: str, entries: list[tuple[str, str]]) -> str:
+    """Render one brief's cards as bullets prefixed with `[STEM]`.
+
+    Stem is the filename without `.md`: legacy briefs render as
+    `[2026-05-18]`; multi-pulse briefs render as `[2026-05-21-1430]`.
+    A single H2 names the brief so the model can scan by source.
+    """
+    lines = [f"## {stem}", ""]
     for title, sentence in entries:
         if sentence:
-            lines.append(f"- [{iso}] {title} -- {sentence}")
+            lines.append(f"- [{stem}] {title} -- {sentence}")
         else:
-            lines.append(f"- [{iso}] {title}")
+            lines.append(f"- [{stem}] {title}")
     lines.append("")
     return "\n".join(lines)
 
@@ -114,33 +122,42 @@ def main() -> int:
         default=5120,
         help="Total bundle byte budget (default: 5120)",
     )
+    ap.add_argument(
+        "--exclude-stem",
+        default="",
+        help="Filename stem (no .md) to omit. Pulse.sh passes the current "
+             "RUN_ID so a retry never self-cites its own prior brief.",
+    )
     args = ap.parse_args()
     args.out_dir = args.out_dir.resolve()
 
     today = date.today()
     earliest = today - timedelta(days=args.days)
-    latest = today - timedelta(days=1)
 
     header = (
         f"# Recently covered ({earliest.isoformat()} through "
-        f"{latest.isoformat()}, today {today.isoformat()} excluded)\n"
+        f"{today.isoformat()}, including any earlier briefs from today)\n"
     )
 
     if not args.out_dir.is_dir():
         print(f"# WARN: out-dir not a directory: {args.out_dir}", file=sys.stderr)
 
-    files: list[tuple[date, Path]] = []
+    files: list[tuple[str, Path]] = []
     if args.out_dir.is_dir():
         for f in args.out_dir.iterdir():
             if not FILENAME_RE.fullmatch(f.name):
                 continue
+            if f.stem == args.exclude_stem:
+                continue
             try:
-                d = date.fromisoformat(f.stem)
+                d = date.fromisoformat(f.stem[:10])
             except ValueError:
                 continue
-            if earliest <= d <= latest:
-                files.append((d, f))
+            if earliest <= d <= today:
+                files.append((f.stem, f))
 
+    # Stem sort is chronological for both legacy YYYY-MM-DD and
+    # multi-pulse YYYY-MM-DD-HHMM filenames; reverse = newest first.
     files.sort(key=lambda pair: pair[0], reverse=True)
 
     if not files:
@@ -156,7 +173,7 @@ def main() -> int:
     sections: list[str] = []
     cumulative = len(header) + 1
 
-    for d, f in files:
+    for stem, f in files:
         try:
             text = f.read_text(errors="replace")
         except OSError as exc:
@@ -171,7 +188,7 @@ def main() -> int:
         if not entries:
             continue
 
-        section = render_section(d, entries)
+        section = render_section(stem, entries)
         # +1 for the "\n" separator that "\n".join inserts before this
         # section (no separator before the first). Always include the
         # first section even if it alone busts the budget; otherwise an
