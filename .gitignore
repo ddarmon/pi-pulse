@@ -10,3 +10,4 @@ memory/seen_urls.jsonl
 __pycache__/
 *.pyc
 .DS_Store
+.claude
