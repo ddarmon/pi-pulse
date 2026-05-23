@@ -10,10 +10,10 @@ Inputs (already attached):
     Each entry has `relation`, `source_class`, `url`, `published`,
     `title`, `gloss`, and `memo_anchor`. This is your candidate pool.
     You cannot pick anything that is not in here.
--   `.tmp/interests_today.md` -- today's memo with five sections:
-    Active threads, Open questions, Persistent interests, Study
-    reinforcement, Avoid. Use this for context when judging which
-    signals matter most today.
+-   `.tmp/interests_today.md` -- today's interest profile with five
+    sections: Active threads, Open questions, Persistent interests,
+    Study reinforcement, Avoid. Use this for context when judging
+    which signals matter most today.
 -   `memory/seen_urls.jsonl` -- URLs already surfaced in past briefs.
     Scout has already filtered these out, but double-check: never emit
     a card whose `Source URL` appears here.
@@ -35,7 +35,7 @@ Quotas are CAPS, not targets (this is a change from prior runs):
     already following.
 -   **Adjacent cards: up to {{ADJACENT}}** -- pick from signals with
     `relation: profile-adjacent`. These are durable-profile interests
-    that scout surfaced from outside the memo.
+    that scout surfaced from outside today's active threads.
 -   **Bridge cards: at least 1, up to {{BRIDGE}}** -- pick from
     signals with `relation: study-bridge` OR `profile-adjacent`
     signals whose `source_class` is `arxiv`, `paper`,
@@ -46,7 +46,7 @@ Quotas are CAPS, not targets (this is a change from prior runs):
     the rationale -- do not fill the slot with a news-shaped signal.
 -   **Follow-up cards: up to {{FOLLOWUP}}** -- a follow-up CONSUMES
     ONE TRACKED SLOT. A candidate is follow-up-eligible only when:
-    (a) its `memo_anchor` references the memo's "Active threads" OR
+    (a) its `memo_anchor` references the "Active threads" OR
     "Open questions", AND (b) a card on the same topic appears in
     `.tmp/recent_pulses.md` (semantic overlap, not just keyword), AND
     (c) the signal's `published` date is newer than the prior card's
@@ -79,17 +79,17 @@ day's cards will hit. This becomes the brief's lede.>
   specific and named, drawn from the signal's title/gloss>
 - **Signal:** S<N>  (the signal ID from signals.md)
 - **Source URL:** <the URL copied verbatim from that signal>
-- **Memo source:** <quote the memo bullet the signal anchors to, or
-  "(profile-adjacent: <durable interest>)" for adjacent cards>
+- **Interest anchor:** <quote the interest bullet the signal anchors
+  to, or "(profile-adjacent: <durable interest>)" for adjacent cards>
 - **Why this card:** <one sentence on why the user would care today>
 
 (repeat for each tracked card, then each adjacent card, then each
 bridge card -- number them sequentially 1, 2, 3, ...)
 
 For an adjacent card, replace `(tracked)` with `(adjacent)` and
-replace the `Memo source` line with:
-- **Why this is adjacent (not in memo):** <name the durable interest
-  this connects to, in one phrase>
+replace the `Interest anchor` line with:
+- **Why this is adjacent:** <name the durable interest this connects
+  to, in one phrase>
 
 For a bridge card, replace `(tracked)` with `(bridge)` and add a
 final line:
@@ -112,7 +112,7 @@ Rules:
 -   **Source URL must be copied verbatim** from `.tmp/signals.md`.
     Do not invent a URL. Do not modify one. If a card has no
     matching signal, do not emit it.
--   Avoid any topic whose memo bullet is in the "Avoid" section.
+-   Avoid any topic whose interest bullet is in the "Avoid" section.
 -   Diversify: do not select two cards on the same paper, library, or
     release. If two signals cover the same primary entity, pick the
     better one and drop the other.

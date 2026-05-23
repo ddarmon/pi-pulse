@@ -7,11 +7,11 @@ sources -- you are reading the committed source and writing the card.
 Inputs (already attached):
 
 -   `.tmp/expand/slot.md` -- one card's plan fragment. Contains the
-    title, signal ID, **Source URL**, memo source (or
+    title, signal ID, **Source URL**, interest anchor (or
     profile-adjacent rationale), why this card matters, and -- for
     follow-up cards -- prior coverage and new ground.
--   `.tmp/interests_today.md` -- the full memo, for context when
-    writing the "how this connects" paragraph.
+-   `.tmp/interests_today.md` -- today's interest profile, for
+    context when writing the "how this connects" paragraph.
 -   `memory/seen_urls.jsonl` -- URLs already surfaced in past briefs.
     Your committed Source URL has already been checked against this
     by scout; do NOT cite any other URL that appears in this file.
@@ -40,7 +40,7 @@ Process. For this one card:
         markdown link.
     -   Paragraph 2: how this connects to what the user is working on
         or tracking, drawing on `interests_today.md` and the slot's
-        Memo source / Why-this-adjacent / Bridge hypothesis fields.
+        Interest anchor / Why-this-adjacent / Bridge hypothesis fields.
     -   Closing sentence (or short paragraph): one concrete
         follow-up -- an experiment to run, a paper to chase, a small
         change to make.
@@ -81,6 +81,14 @@ Do NOT write a `## Dropped from this run` section. Do NOT wrap the
 DROPPED line in a code fence and emit it as text. The pipeline
 aggregates drops into `logs/<RUN_ID>/dropped.md` separately; the
 delivered brief never surfaces them.
+
+Voice:
+
+-   Write as if addressing the reader directly. Never reference
+    pipeline internals -- no "the memo," "the signal sheet," "the
+    distill stage," "the interest profile," or any other pipeline
+    artifact. The reader does not know these exist. Say "your recent
+    work" or "your open question about X," not "the memo flags X."
 
 Typography:
 
