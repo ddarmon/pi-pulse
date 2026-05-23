@@ -67,17 +67,20 @@ committed Source URL) AND AT MOST one fallback `search.js` call
 a successful fetch -- write from what you already have.
 
 Drop rule: if both the committed `content.js` fetch and the fallback
-`search.js` fail to yield a usable primary source, **emit no card
-body on stdout** and write a single line to stderr in this exact
-form so the pipeline can aggregate it:
+`search.js` fail to yield a usable primary source, do TWO things and
+NOTHING else:
 
-```
-DROPPED slot=<slot_id> reason=<short phrase, no commas>
-```
+1.  Use Bash to write the drop marker to stderr:
+    `echo "DROPPED slot=<slot_id> reason=<short phrase, no commas>" >&2`
+2.  **Emit no text at all** as your final assistant message -- no card
+    body, no code block, no explanation. Your text output is captured
+    as stdout and becomes the card body file; any text you emit will
+    leak into the delivered brief.
 
-Do NOT write a `## Dropped from this run` section in stdout. The
-pipeline aggregates drops into `logs/<RUN_ID>/dropped.md`
-separately; the delivered brief never surfaces them.
+Do NOT write a `## Dropped from this run` section. Do NOT wrap the
+DROPPED line in a code fence and emit it as text. The pipeline
+aggregates drops into `logs/<RUN_ID>/dropped.md` separately; the
+delivered brief never surfaces them.
 
 Typography:
 
@@ -109,5 +112,5 @@ Output channel: emit the card body as your final assistant text
 message. Do NOT use the Write or Edit tools to create or modify any
 files -- the pipeline captures your stdout into a per-slot file,
 and a concurrent Write call races the stdout redirection and
-corrupts the output. Drops go to stderr only (the `DROPPED ...`
-line described above).
+corrupts the output. Drops go to stderr only via Bash
+(`echo "DROPPED ..." >&2`); see the drop rule above.

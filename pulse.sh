@@ -262,7 +262,7 @@ done < "$MANIFEST_FILE"
   echo
   while IFS=$'\t' read -r slot_id _slot_tag; do
     body=".tmp/expand/$slot_id/body.md"
-    if [[ -s "$body" ]]; then
+    if [[ -s "$body" ]] && ! grep -q 'DROPPED slot=' "$body"; then
       cat "$body"
       echo
     fi
@@ -277,9 +277,11 @@ dropped_count=0
   while IFS=$'\t' read -r slot_id slot_tag; do
     body=".tmp/expand/$slot_id/body.md"
     err=".tmp/expand/$slot_id/err.log"
-    if [[ ! -s "$body" ]]; then
+    if [[ ! -s "$body" ]] || grep -q 'DROPPED slot=' "$body"; then
       reason=""
-      if [[ -s "$err" ]]; then
+      if grep -qE 'DROPPED slot=' "$body" 2>/dev/null; then
+        reason=$(grep -oE 'DROPPED slot=[^ ]+ reason=.*' "$body" | head -1 | sed 's/^DROPPED //')
+      elif [[ -s "$err" ]]; then
         reason=$(grep -E '^DROPPED ' "$err" | head -1 | sed 's/^DROPPED //')
       fi
       if [[ -z "$reason" ]]; then
