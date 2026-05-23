@@ -81,9 +81,12 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
     (capped by `PI_PULSE_EXPAND_PARALLEL`). This is the source-first
     pipeline; it relies on an unlimited Ollama subscription. If the
     provider changes, reintroduce a hard call budget in `pulse.sh`.
--   **Card quotas are caps, not targets.** Plan emits fewer cards
-    when scout returns fewer grounded signals. A short, fully grounded
-    brief is the goal -- never invent a topic to fill a slot.
+-   **Card quotas are caps, not targets** (except the bridge
+    minimum). Plan emits fewer cards when scout returns fewer grounded
+    signals. A short, fully grounded brief is the goal -- never
+    invent a topic to fill a slot. The bridge slot has a minimum of
+    1 to protect foundational/theoretical content from being crowded
+    out by news-shaped signals on infrastructure-heavy days.
 -   **One RUN_ID per invocation.** Every `pulse.sh` run owns a
     `RUN_ID` of the form `YYYY-MM-DD-HHMM` (set from the wall clock,
     or overridden via `PI_PULSE_RUN_ID` for backfill or retry).

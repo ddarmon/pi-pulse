@@ -127,6 +127,19 @@ if [[ "$PI_PROVIDER" == "ollama" ]]; then
   fi
 fi
 
+# 0b. Ensure Anki is running so AnkiConnect can serve collect_anki.py.
+if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1; then
+  log "AnkiConnect not reachable; launching Anki"
+  open -g -a Anki
+  for _i in $(seq 1 15); do
+    sleep 2
+    curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1 && break
+  done
+  if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1; then
+    log "WARN: Anki did not respond after 30s; Anki signals will be empty"
+  fi
+fi
+
 # 1. Collect
 log "collecting notes (${NOTES_SINCE}d)"
 uv run sources/collect_obsidian.py --since "$NOTES_SINCE" > .tmp/chats_recent.md 2>"$LOG_DIR/collect-obsidian.err"

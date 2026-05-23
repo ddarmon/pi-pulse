@@ -36,9 +36,14 @@ Quotas are CAPS, not targets (this is a change from prior runs):
 -   **Adjacent cards: up to {{ADJACENT}}** -- pick from signals with
     `relation: profile-adjacent`. These are durable-profile interests
     that scout surfaced from outside the memo.
--   **Bridge cards: up to {{BRIDGE}}** -- pick from signals with
-    `relation: study-bridge`. If scout returned no `study-bridge`
-    signals, emit zero bridge cards and say so in the rationale.
+-   **Bridge cards: at least 1, up to {{BRIDGE}}** -- pick from
+    signals with `relation: study-bridge` OR `profile-adjacent`
+    signals whose `source_class` is `arxiv`, `paper`,
+    `lecture-notes`, or `tutorial`. This slot protects foundational
+    and theoretical content (math, statistics, complexity science,
+    deep architecture theory) from being crowded out by news-shaped
+    signals. If no qualifying signal exists, emit zero and say so in
+    the rationale -- do not fill the slot with a news-shaped signal.
 -   **Follow-up cards: up to {{FOLLOWUP}}** -- a follow-up CONSUMES
     ONE TRACKED SLOT. A candidate is follow-up-eligible only when:
     (a) its `memo_anchor` references the memo's "Active threads" OR
@@ -89,7 +94,7 @@ replace the `Memo source` line with:
 For a bridge card, replace `(tracked)` with `(bridge)` and add a
 final line:
 - **Bridge hypothesis:** <one sentence on how the signal connects
-  the study leech to active work>
+  to foundational interests or active work>
 
 For a follow-up card, replace `(tracked)` with
 `(follow-up of STEM)` -- using the prior brief's exact bracketed
