@@ -275,7 +275,12 @@ done < "$MANIFEST_FILE"
   echo
   while IFS=$'\t' read -r slot_id _slot_tag; do
     body=".tmp/expand/$slot_id/body.md"
-    if [[ -s "$body" ]] && ! grep -q 'DROPPED slot=' "$body"; then
+    # A valid card body always starts with a `## ` heading. Anything
+    # else -- empty, a DROPPED marker, or stray model narration like
+    # "(Empty response -- slot dropped ...)" -- is a malformed/drop
+    # output and must never reach the delivered brief.
+    if [[ -s "$body" ]] && [[ "$(head -c 3 "$body")" == "## " ]] \
+       && ! grep -q 'DROPPED slot=' "$body"; then
       cat "$body"
       echo
     fi
@@ -290,12 +295,15 @@ dropped_count=0
   while IFS=$'\t' read -r slot_id slot_tag; do
     body=".tmp/expand/$slot_id/body.md"
     err=".tmp/expand/$slot_id/err.log"
-    if [[ ! -s "$body" ]] || grep -q 'DROPPED slot=' "$body"; then
+    if [[ ! -s "$body" ]] || [[ "$(head -c 3 "$body" 2>/dev/null)" != "## " ]] \
+       || grep -q 'DROPPED slot=' "$body"; then
       reason=""
       if grep -qE 'DROPPED slot=' "$body" 2>/dev/null; then
         reason=$(grep -oE 'DROPPED slot=[^ ]+ reason=.*' "$body" | head -1 | sed 's/^DROPPED //')
-      elif [[ -s "$err" ]]; then
+      elif grep -qE '^DROPPED ' "$err" 2>/dev/null; then
         reason=$(grep -E '^DROPPED ' "$err" | head -1 | sed 's/^DROPPED //')
+      elif [[ -s "$body" ]]; then
+        reason="reason=malformed expand output (no '## ' heading); see $body"
       fi
       if [[ -z "$reason" ]]; then
         reason="unknown (no DROPPED line on stderr; see $err)"

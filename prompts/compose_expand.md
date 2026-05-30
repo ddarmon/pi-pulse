@@ -26,12 +26,21 @@ Process. For this one card:
     size-bounded and have overflowed context before.
 2.  If the fetch SUCCEEDS, write the card from what you read. Cite
     the Source URL inline as a markdown link in paragraph 1.
-3.  If the fetch FAILS (404, timeout, blocked) you MAY run ONE
-    fallback `search.js` query using the card's title to find a
-    different primary source. If it returns a clearly equivalent
-    primary (same release, same paper, same announcement) at a
-    different URL, use that and cite it. If it does not, DROP the
-    card (see Drop rule below).
+3.  A fetch FAILS if it 404s, times out, is blocked, OR returns an
+    unrenderable stub -- a near-empty body or a client-side-rendered
+    placeholder (e.g. just the page title plus `Loading...` and no
+    substantive text). This is common for SPA documentation pages
+    such as platform.claude.com or vendor API docs; treat it as a
+    failed fetch, not as usable content. On a failed fetch you MAY
+    run ONE fallback `search.js` query using the card's title. Then:
+    -   If `search.js` returns substantive content for the committed
+        Source URL itself (the same page surfaced with a usable
+        snippet or cached text that confirms the facts), write the
+        card from that content and cite the committed Source URL.
+    -   Else if it returns a clearly equivalent primary (same
+        release, same paper, same announcement) at a different URL,
+        use that and cite it.
+    -   Else, DROP the card (see Drop rule below).
 4.  Write the card as **250--400 words of continuous prose** in
     2--3 paragraphs. No bullet lists. No labeled fields. No
     "Source:" or "Follow-up:" labels.
@@ -67,20 +76,20 @@ committed Source URL) AND AT MOST one fallback `search.js` call
 a successful fetch -- write from what you already have.
 
 Drop rule: if both the committed `content.js` fetch and the fallback
-`search.js` fail to yield a usable primary source, do TWO things and
-NOTHING else:
+`search.js` fail to yield a usable primary source, your ENTIRE final
+assistant message must be exactly one line and nothing else:
 
-1.  Use Bash to write the drop marker to stderr:
-    `echo "DROPPED slot=<slot_id> reason=<short phrase, no commas>" >&2`
-2.  **Emit no text at all** as your final assistant message -- no card
-    body, no code block, no explanation. Your text output is captured
-    as stdout and becomes the card body file; any text you emit will
-    leak into the delivered brief.
+    DROPPED slot=<slot_id> reason=<short phrase, no commas>
 
-Do NOT write a `## Dropped from this run` section. Do NOT wrap the
-DROPPED line in a code fence and emit it as text. The pipeline
-aggregates drops into `logs/<RUN_ID>/dropped.md` separately; the
-delivered brief never surfaces them.
+Emit no card body, no `## ` heading, no code fence, no explanation --
+just that single line. Your text output is captured as stdout and
+becomes the per-slot body file; the pipeline recognizes a body that
+is empty or that does not begin with a `## ` heading as a drop, keeps
+it out of the delivered brief, and records the reason in
+`logs/<RUN_ID>/dropped.md`. Do NOT write a `## Dropped from this run`
+section. Do NOT invent a placeholder sentence like "(Empty response
+-- slot dropped)"; that is not empty and will be treated as a drop
+with no reason. Do NOT use the Write or Edit tools.
 
 Voice:
 
@@ -116,9 +125,9 @@ lede from the plan separately.
 Start with `## ` and the card heading. No preamble, no closing
 sign-off, no surrounding fences.
 
-Output channel: emit the card body as your final assistant text
+Output channel: emit the card body -- or, on a drop, the single
+`DROPPED slot=... reason=...` line -- as your final assistant text
 message. Do NOT use the Write or Edit tools to create or modify any
 files -- the pipeline captures your stdout into a per-slot file,
 and a concurrent Write call races the stdout redirection and
-corrupts the output. Drops go to stderr only via Bash
-(`echo "DROPPED ..." >&2`); see the drop rule above.
+corrupts the output. See the drop rule above.
