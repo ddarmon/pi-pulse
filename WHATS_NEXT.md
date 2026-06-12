@@ -59,6 +59,30 @@ URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
 
+-   **Deterministic hard predicates (2026-06-11).** Three checks that
+    were prompt-level promises are now code. (1)
+    `sources/filter_signals.py` sits between scout and plan: scout's
+    stdout lands in `.tmp/signals_raw.md`, the filter drops signals
+    whose normalized URL (shared `append_seen.normalize`) is in
+    `memory/seen_urls.jsonl` or `memory/unfetchable_urls.jsonl`,
+    dedupes within the sheet, and writes `.tmp/signals.md`; an
+    all-filtered sheet is a loud exit-1. (2) `split_plan.py
+    --signals` verifies each plan slot's `Source URL:` against the
+    signal sheet and excludes failures from the manifest as
+    `DROPPED slot=NN tag=... reason=...` on stderr, which pulse.sh
+    folds into `dropped.md`. (3) `sources/append_unfetchable.py`
+    records model-dropped slots' Source URLs (the
+    `DROPPED slot=... reason=...` contract from compose_expand.md)
+    into `memory/unfetchable_urls.jsonl` so a 403'd source is not
+    re-scouted and re-dropped the next day; `pi-exit-nonzero` and
+    malformed-body drops are skipped, and the step only runs on
+    runs that delivered (all-dropped runs usually mean a systemic
+    failure like a missing `BRAVE_API_KEY`, not bad URLs).
+    Motivating evidence: in the week of 2026-06-05--11, both expand
+    drops were paywalled-publisher 403s (Wiley, ACM) whose URLs
+    never entered the seen ledger and so remained re-discoverable;
+    the 2026-06-11 ACM URL was used as the live test fixture.
+
 -   **Source-first pipeline (2026-05-21).** Replaced the
     distill→plan→expand contract with distill→scout→plan→expand, where
     `scout` (new pi call, `prompts/scout_signals.md`) probes

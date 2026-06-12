@@ -21,14 +21,20 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
 3.  **scout** -- `pi -p prompts/scout_signals.md` runs broad
     `brave-search` queries per interest cluster (memo bullets +
     durable-profile candidates from `interests.md`) and writes a
-    structured signal sheet at `.tmp/signals.md`: one entry per fresh
-    primary source with `url`, `published`, `source_class`, `gloss`,
-    `memo_anchor`, and `relation`
+    structured signal sheet at `.tmp/signals_raw.md`: one entry per
+    fresh primary source with `url`, `published`, `source_class`,
+    `gloss`, `memo_anchor`, and `relation`
     (`memo-anchored` / `profile-adjacent` / `study-bridge`). Bounded
     by `PI_PULSE_SCOUT_MAX_INTERESTS` (default 12) and
     `PI_PULSE_SCOUT_QUERIES_PER_INTEREST` (default 2). Aggregator
-    results (HN, Reddit, Twitter, link blogs) are rejected. URLs in
-    `memory/seen_urls.jsonl` are filtered out here.
+    results (HN, Reddit, Twitter, link blogs) are rejected.
+    `sources/filter_signals.py` then deterministically drops signals
+    whose normalized URL is in `memory/seen_urls.jsonl` (already
+    surfaced) or `memory/unfetchable_urls.jsonl` (committed before
+    but the expand fetch failed), dedupes within the sheet, and
+    writes the surviving pool to `.tmp/signals.md`. The scout prompt
+    still receives the seen ledger so the model doesn't waste query
+    budget, but ledger enforcement lives in code.
 4.  **plan** -- `pi -p prompts/compose_plan.md --no-skills` ranks
     scout signals into card slots. Each slot's `Source URL:` is
     copied verbatim from `.tmp/signals.md` -- plan never invents URLs
@@ -36,7 +42,11 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     CAPS, not targets: on slow signal days the brief shrinks rather
     than padding. Default caps 5/2/1/1.
 5.  **expand** -- `sources/split_plan.py` writes one
-    `.tmp/expand/NN/slot.md` per planned card; `sources/expand_slot.sh`
+    `.tmp/expand/NN/slot.md` per planned card, verifying each slot's
+    `Source URL:` against `.tmp/signals.md` (normalized comparison);
+    a slot whose URL is missing or not in the sheet never reaches the
+    manifest and is reported as a split-stage drop in
+    `logs/${RUN_ID}/dropped.md`. `sources/expand_slot.sh`
     is invoked once per slot via `xargs -P
     $PI_PULSE_EXPAND_PARALLEL` (default 4). Each per-slot
     `pi -p prompts/compose_expand.md` fetches the committed Source URL
@@ -50,7 +60,13 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
 6.  **deliver** -- stitch `.tmp/expand/theme.md` (lifted from plan)
     with each non-empty per-slot body into `out/${RUN_ID}.md`
     (where `RUN_ID` is `YYYY-MM-DD-HHMM`); append URLs to
-    `memory/seen_urls.jsonl`; render `out/${RUN_ID}.html` from the
+    `memory/seen_urls.jsonl`; record fetch-failed slots' Source URLs
+    in `memory/unfetchable_urls.jsonl` via
+    `sources/append_unfetchable.py` (model-emitted drops only --
+    `pi-exit-nonzero` and malformed bodies are skipped, and the step
+    is skipped entirely when every slot dropped, since that usually
+    means a systemic failure rather than bad URLs); render
+    `out/${RUN_ID}.html` from the
     markdown via `sources/render_html.py` (pandoc preferred, Python
     `markdown` fallback, MathJax loaded only when math is detected);
     copy both `.md` and `.html` to `$PI_PULSE_DELIVERY` if set.
@@ -73,9 +89,10 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
     placeholders in pulse.sh with `sed`, not `envsubst`. The launchd
     template uses the same double-brace convention.
 -   **No personal data in committed files.** `memory/interests.md`,
-    `memory/seen_urls.jsonl`, `out/`, `logs/`, `.pulse-sessions/`,
-    `.env`, and `memory/interests.md.local` are all gitignored. The
-    `.example` and `.template` counterparts are committed.
+    `memory/seen_urls.jsonl`, `memory/unfetchable_urls.jsonl`, `out/`,
+    `logs/`, `.pulse-sessions/`, `.env`, and
+    `memory/interests.md.local` are all gitignored. The `.example`
+    and `.template` counterparts are committed.
 -   **Pi-call count is variable.** `pulse.sh` invokes `pi` for distill,
     scout, plan, and once per planned card slot in parallel expand
     (capped by `PI_PULSE_EXPAND_PARALLEL`). This is the source-first
@@ -115,12 +132,15 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 -   `.pulse-sessions/${RUN_ID}/{distill,scout,plan,expand}/` -- full
     pi session JSONLs. Parse with `sources/inspect_session.py`. Expand
     has one subdirectory per slot (`expand/01/`, `expand/02/`, ...).
--   `.tmp/signals.md` -- scout's structured signal sheet (the candidate
-    pool plan picks from).
+-   `.tmp/signals_raw.md` -- scout's structured signal sheet as the
+    model emitted it; `.tmp/signals.md` -- the post-ledger-filter pool
+    plan picks from. `logs/${RUN_ID}/filter-signals.err` lists each
+    `FILTERED signal=... reason=...` line plus kept/total counts.
 -   `.tmp/expand/NN/{slot.md,body.md,err.log}` -- per-slot plan
     fragment, card body, and stderr (including any `DROPPED` line).
 -   `pulse.sh` exits 1 if distill, scout, or plan produces 0-byte
-    output, or if every expand slot drops. Logs are preserved.
+    output, if the ledger filter drops every scout signal, or if
+    every expand slot drops. Logs are preserved.
 
 ## Known constraints
 
