@@ -33,6 +33,7 @@ from append_seen import normalize
 
 SIGNAL_RE = re.compile(r"^## Signal\s+(\S+)\s*$")
 URL_RE = re.compile(r"^\s*-\s*url:\s*(\S+)\s*$")
+SHEET_H1_RE = re.compile(r"^# Signals\b")
 
 
 def load_ledger(path: Path) -> set[str]:
@@ -152,10 +153,22 @@ def main() -> int:
         # this into a loud stage failure rather than a silent empty plan.
         return 0
 
+    # The sheet header is only the canonical `# Signals YYYY-MM-DD` H1.
+    # Anything else before the first signal block is leaked model
+    # narration (draft entries, deliberation) -- observed in a live
+    # run where ~180 lines of deliberation preceded the sheet. Strip
+    # it so plan receives only the sheet.
+    h1 = next((line for line in header if SHEET_H1_RE.match(line)), None)
+    preamble = sum(1 for line in header if line.strip() and line is not h1)
+    if preamble:
+        print(
+            f"# filter_signals: stripped {preamble} non-sheet preamble line(s)",
+            file=sys.stderr,
+        )
+
     parts: list[str] = []
-    header_text = "\n".join(header).rstrip()
-    if header_text:
-        parts.append(header_text)
+    if h1 is not None:
+        parts.append(h1.strip())
     for lines in kept:
         parts.append("\n".join(lines).rstrip())
     sys.stdout.write("\n\n".join(parts) + "\n")
