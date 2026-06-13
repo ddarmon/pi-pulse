@@ -26,15 +26,18 @@ if [[ -f .env ]]; then
 fi
 
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
-PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
-# This task is mechanical extraction/comparison, not deep reasoning. At
-# the model's default thinking level kimi burned its entire 16,384-token
-# output budget on reasoning (~72k chars) and emitted no/truncated
-# proposals. `low` did not help (still ~72k chars of thinking); only
-# `off` actually suppresses it (verified: ~130 chars on a trivial call),
-# leaving the whole output budget for proposals. Override with
-# PI_SUGGEST_THINKING if a future model needs some reasoning.
-THINKING="${PI_SUGGEST_THINKING:-off}"
+# This stage deliberately does NOT use the pipeline's kimi-k2.6:cloud.
+# That model emits ~72k chars of inline chain-of-thought on this
+# evaluative task regardless of --thinking (off only suppresses it on
+# trivial prompts), saturating the fixed 16,384-token output cap and
+# emitting no/truncated proposals. gemma4:31b-cloud is a non-reasoning
+# instruct model: it produced 3 clean proposals in ~6s / 449 output
+# tokens. Override with PI_SUGGEST_MODEL.
+SUGGEST_MODEL="${PI_SUGGEST_MODEL:-gemma4:31b-cloud}"
+# Optional thinking level; empty means don't pass --thinking at all
+# (gemma is non-reasoning and needs none). Set if you point
+# PI_SUGGEST_MODEL at a reasoning model that honors it.
+THINKING="${PI_SUGGEST_THINKING:-}"
 DAYS="${1:-${PI_PULSE_SUGGEST_DAYS:-7}}"
 TS=$(date +%Y-%m-%d-%H%M)
 SESSION_DIR=".pulse-sessions/suggest/${TS}"
@@ -59,10 +62,12 @@ uv run sources/build_suggest_input.py --days "$DAYS"
 # envsubst).
 PROMPT=$(sed -e "s|{{DAYS}}|${DAYS}|g" "$PROMPT_FILE")
 
-echo "[suggest] launching pi (${PI_PROVIDER}/${PI_MODEL}, thinking=${THINKING})"
+think_args=()
+[[ -n "$THINKING" ]] && think_args=(--thinking "$THINKING")
+echo "[suggest] launching pi (${PI_PROVIDER}/${SUGGEST_MODEL}${THINKING:+, thinking=$THINKING})"
 pi -p "$PROMPT" \
-   --provider "$PI_PROVIDER" --model "$PI_MODEL" \
-   --thinking "$THINKING" \
+   --provider "$PI_PROVIDER" --model "$SUGGEST_MODEL" \
+   ${think_args[@]+"${think_args[@]}"} \
    --no-skills \
    --session-dir "$SESSION_DIR" \
    @"$PROFILE" @.tmp/suggest_input.md \

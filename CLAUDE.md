@@ -174,12 +174,18 @@ no-tools `pi` call on `prompts/suggest_profile.md` to emit 0--6
 machine-parseable proposals (`ADD`/`EDIT`/`DEMOTE`) to
 `.tmp/profile_updates.md`. It never edits the profile.
 
-The suggest call passes `--thinking low` (override `PI_SUGGEST_THINKING`)
-and the brief fallback is condensed to titles + lede
-(`build_suggest_input.condense_brief`). Both are load-bearing: at the
-model's default thinking level on the full-prose input (~116k chars),
-kimi spent its entire 16,384-token output budget reasoning and emitted
-zero proposals. Keep thinking low and the input compact.
+**This stage uses `gemma4:31b-cloud`, not the pipeline's
+`kimi-k2.6:cloud`** (override `PI_SUGGEST_MODEL`). This is load-bearing:
+kimi emits ~72k chars of inline chain-of-thought on this evaluative task
+regardless of `--thinking` (`off` only suppresses reasoning on trivial
+prompts), saturating the fixed 16,384-token output cap and emitting no or
+truncated proposals across three live runs. gemma4 is a non-reasoning
+instruct model that returned clean proposals in ~6s / ~450 output tokens.
+pi exposes no max-output-tokens flag, so a non-reasoning model is the
+fix. The brief fallback is also condensed to titles + lede
+(`build_suggest_input.condense_brief`) to keep the input compact. If you
+point `PI_SUGGEST_MODEL` at a reasoning model, set `PI_SUGGEST_THINKING`
+accordingly (default: unset, no `--thinking` flag passed).
 
 `scripts/apply-updates.sh` (-> `sources/apply_updates.py`) walks the
 proposals interactively (`y`/`n`/`q`), snapshots the profile to
