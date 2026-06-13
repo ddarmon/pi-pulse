@@ -174,6 +174,13 @@ no-tools `pi` call on `prompts/suggest_profile.md` to emit 0--6
 machine-parseable proposals (`ADD`/`EDIT`/`DEMOTE`) to
 `.tmp/profile_updates.md`. It never edits the profile.
 
+The suggest call passes `--thinking low` (override `PI_SUGGEST_THINKING`)
+and the brief fallback is condensed to titles + lede
+(`build_suggest_input.condense_brief`). Both are load-bearing: at the
+model's default thinking level on the full-prose input (~116k chars),
+kimi spent its entire 16,384-token output budget reasoning and emitted
+zero proposals. Keep thinking low and the input compact.
+
 `scripts/apply-updates.sh` (-> `sources/apply_updates.py`) walks the
 proposals interactively (`y`/`n`/`q`), snapshots the profile to
 `memory/interests-history/` before any write (same pattern as

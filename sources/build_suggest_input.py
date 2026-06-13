@@ -43,13 +43,33 @@ def collect_memos(logs_dir: Path, cutoff: date) -> list[tuple[str, str]]:
     return out
 
 
+def condense_brief(text: str) -> str:
+    """Title + lede + card headings only -- drop the 250--400w bodies.
+
+    The full prose blows up the input (8 briefs ~= 116k chars, enough to
+    saturate the model's reasoning budget). For drift detection only the
+    topics matter, which the title line, the lede, and the `## ` card
+    headings carry.
+    """
+    kept: list[str] = []
+    seen_first_card = False
+    for line in text.splitlines():
+        if line.startswith("# ") or line.startswith("## "):
+            kept.append(line)
+            if line.startswith("## "):
+                seen_first_card = True
+        elif not seen_first_card and line.strip():
+            kept.append(line)  # lede paragraph(s) before the first card
+    return "\n".join(kept)
+
+
 def collect_briefs(out_dir: Path, cutoff: date) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for brief in sorted(out_dir.glob("*.md")):
         if brief.name.endswith(".feedback.md") or "_backup" in brief.name:
             continue
         if within(brief.stem, cutoff):
-            out.append((brief.stem, brief.read_text(errors="replace")))
+            out.append((brief.stem, condense_brief(brief.read_text(errors="replace"))))
     return out
 
 

@@ -27,6 +27,11 @@ fi
 
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
 PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
+# This task is mechanical extraction/comparison, not deep reasoning. With
+# the model's default thinking level, kimi burned its entire 16,384-token
+# output budget on reasoning and emitted no proposals. Keep thinking low
+# so the budget goes to content. Override with PI_SUGGEST_THINKING.
+THINKING="${PI_SUGGEST_THINKING:-low}"
 DAYS="${1:-${PI_PULSE_SUGGEST_DAYS:-7}}"
 TS=$(date +%Y-%m-%d-%H%M)
 SESSION_DIR=".pulse-sessions/suggest/${TS}"
@@ -51,9 +56,10 @@ uv run sources/build_suggest_input.py --days "$DAYS"
 # envsubst).
 PROMPT=$(sed -e "s|{{DAYS}}|${DAYS}|g" "$PROMPT_FILE")
 
-echo "[suggest] launching pi (${PI_PROVIDER}/${PI_MODEL})"
+echo "[suggest] launching pi (${PI_PROVIDER}/${PI_MODEL}, thinking=${THINKING})"
 pi -p "$PROMPT" \
    --provider "$PI_PROVIDER" --model "$PI_MODEL" \
+   --thinking "$THINKING" \
    --no-skills \
    --session-dir "$SESSION_DIR" \
    @"$PROFILE" @.tmp/suggest_input.md \
