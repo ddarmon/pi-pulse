@@ -129,15 +129,22 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 Each run emits `out/${RUN_ID}.feedback.md`: one numbered line per
 delivered card (card N is the Nth `## ` heading in the brief), each
 prefixed with an editable mark. The reader edits the marks
-(`[++]`/`[+]`/`[ ]`/`[-]`/`[--]`, optional indented `note:` line) and
-runs `scripts/ingest-feedback.sh [RUN_ID]` (defaults to the newest
-feedback file). Ingest re-joins each rated card against the brief to
+(`[++]`/`[+]`/`[ ]`/`[-]`/`[--]`, optional indented `note:` line)
+whenever; **`pulse.sh` auto-ingests on the next run** (step 1c calls
+`scripts/ingest-feedback.sh --all`, sweeping every `out/*.feedback.md`),
+so manual ingest is normally unnecessary. Run
+`scripts/ingest-feedback.sh [RUN_ID]` by hand only to pick edits up
+immediately. Ingest re-joins each rated card against the brief to
 recover its title, normalized primary URL, and tag, then writes rows to
 `memory/feedback.jsonl` (gitignored). Ingest is **idempotent** -- it
-drops a run's existing rows before re-adding, so you can re-edit and
-re-ingest. It then rebuilds `.tmp/feedback_recent.md` (last 14 days,
-grouped valued / not-valued / avoid-candidates) via
-`build_feedback_digest.py`. The whole path makes **zero model calls**.
+drops a run's existing rows before re-adding, so sweeping all files
+every run is safe (unedited files contribute zero rows; already-ingested
+rows are replaced, not duplicated). It then rebuilds
+`.tmp/feedback_recent.md` (last 14 days, grouped valued / not-valued /
+avoid-candidates) via `build_feedback_digest.py`. The whole path makes
+**zero model calls**. Note a run cannot ingest its *own* feedback file
+(written at deliver, all-unrated at that point) -- today's edits are
+swept up by tomorrow's run.
 The digest is the intended input to a future weekly profile-suggest
 stage; nothing consumes it in the daily pipeline yet. Unrated (`[ ]`)
 cards are skipped; `[--]` does not auto-suppress a topic (the URL is

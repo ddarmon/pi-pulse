@@ -160,6 +160,16 @@ uv run sources/build_recent_pulses.py --days "$HISTORY_DAYS" \
    > .tmp/recent_pulses.md \
    2>"$LOG_DIR/build-recent.err"
 
+# 1c. Sweep any feedback the reader has edited since prior runs into
+# memory/feedback.jsonl and refresh .tmp/feedback_recent.md. Idempotent
+# and zero model calls, so it is safe to run every pulse; unedited files
+# contribute nothing. This run's own feedback file does not exist yet
+# (it is written at deliver), so today's edits are picked up tomorrow.
+# Non-fatal: feedback bookkeeping must never sink a brief.
+log "sweeping card feedback"
+scripts/ingest-feedback.sh --all >"$LOG_DIR/ingest-feedback.log" 2>&1 \
+  || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
+
 # 2. Distill (no tools)
 log "distill stage: ${PI_PROVIDER}/${PI_MODEL}"
 distill_start=$SECONDS
