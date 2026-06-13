@@ -248,9 +248,9 @@ def main() -> int:
         # any other key: redraw same card
 
     sys.stdout.write("\033[2J\033[H")
-    print(f"done. {rated} rating action(s) saved across {len(state)} brief(s).")
-    print("run scripts/ingest-feedback.sh to fold them into memory/feedback.jsonl now,")
-    print("or just let the next pulse run sweep them up.")
+    print(f"done. {rated} rating action(s) saved to the .feedback.md files.")
+    print("(via scripts/review-feedback.sh, these are ingested automatically next;")
+    print(" otherwise the next pulse run sweeps them into memory/feedback.jsonl.)")
     return 0
 
 
