@@ -129,8 +129,14 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 Each run emits `out/${RUN_ID}.feedback.md`: one numbered line per
 delivered card (card N is the Nth `## ` heading in the brief), each
 prefixed with an editable mark. The reader edits the marks
-(`[++]`/`[+]`/`[ ]`/`[-]`/`[--]`, optional indented `note:` line)
-whenever; **`pulse.sh` auto-ingests on the next run** (step 1c calls
+(`[++]`/`[+]`/`[ ]`/`[-]`/`[--]`, optional indented `note:` line) by hand
+or via the interactive reviewer `scripts/review-feedback.sh` (a
+zero-dependency single-keypress TUI, `sources/review_feedback.py`, that
+shows each card's prose from the brief and writes marks back to the
+`.feedback.md`; default queue is every unrated card across all briefs,
+oldest first; pass a `RUN_ID` for one brief or `--include-rated` to
+revisit). Either way, **`pulse.sh` auto-ingests on the next run** (step
+1c calls
 `scripts/ingest-feedback.sh --all`, sweeping every `out/*.feedback.md`),
 so manual ingest is normally unnecessary. Run
 `scripts/ingest-feedback.sh [RUN_ID]` by hand only to pick edits up

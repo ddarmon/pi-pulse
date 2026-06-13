@@ -88,6 +88,16 @@ URL resolves but whose claims don't match the page content.
     the digest yet -- it is the intended input to backlog item 1
     (weekly profile-suggest). `[--]` does not auto-suppress topics; it
     only flags avoid-candidates for the weekly review.
+    `scripts/ingest-feedback.sh --all` (default) sweeps every feedback
+    file; `pulse.sh` step 1c runs it each pulse so manual ingest is
+    normally unnecessary. An interactive single-keypress reviewer
+    (`scripts/review-feedback.sh` -> `sources/review_feedback.py`,
+    zero-dependency stdlib termios) shows each card's prose and writes
+    marks back to the markdown; default queue is all unrated cards
+    across briefs, oldest first (`RUN_ID` for one brief,
+    `--include-rated` to revisit). The reviewer rewrites the whole
+    `.feedback.md` on each keypress, so its round-trip is verified to
+    preserve existing marks and the ingest grammar.
 
 -   **Deterministic hard predicates (2026-06-11).** Three checks that
     were prompt-level promises are now code. (1)
