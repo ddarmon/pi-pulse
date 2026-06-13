@@ -3,8 +3,11 @@
 #   1. Collect inputs (notes / sesh / Anki) into .tmp/
 #   2. Distill via Pi headless (no tools): five-section memo
 #   3. Scout via Pi headless (web search/fetch enabled): probe brave-
-#      search per interest cluster, emit structured signals.md so the
-#      plan stage picks from real evidence, not imagined sources
+#      search per interest cluster, emit a structured signal sheet so
+#      the plan stage picks from real evidence, not imagined sources.
+#      sources/filter_signals.py then drops signals whose normalized
+#      URL is in memory/seen_urls.jsonl or memory/unfetchable_urls.jsonl
+#      (deterministic; the prompt-level ledger check is advisory only)
 #   4. Plan via Pi headless (no tools): rank scout signals into
 #      TRACKED / ADJACENT / BRIDGE / FOLLOWUP card slots, each with a
 #      committed Source URL drawn verbatim from signals.md
@@ -191,7 +194,7 @@ pi -p "$SCOUT_PROMPT" \
    --session-dir "$SESSION_DIR/scout" \
    @.tmp/interests_today.md @memory/interests.md \
    @memory/seen_urls.jsonl @.tmp/recent_pulses.md \
-   > .tmp/signals.md \
+   > .tmp/signals_raw.md \
    2>"$LOG_DIR/scout.err"
 log "scout finished in $((SECONDS - scout_start))s"
 scout_session=$(newest_session "$SESSION_DIR/scout")
@@ -199,10 +202,30 @@ if [[ -n "$scout_session" ]]; then
   uv run sources/inspect_session.py "$scout_session" --label "scout" \
     > "$LOG_DIR/scout.log.md"
 fi
-if [[ ! -s .tmp/signals.md ]]; then
+if [[ ! -s .tmp/signals_raw.md ]]; then
   log "ERROR: scout stage produced empty signals. See $LOG_DIR/scout.err"
   exit 1
 fi
+
+# 3b. Deterministic ledger filter: drop signals whose normalized URL is
+# already in seen_urls.jsonl (surfaced before) or unfetchable_urls.jsonl
+# (committed before but the expand fetch failed). The scout prompt asks
+# the model to respect the seen ledger, but set membership over
+# normalized URLs belongs in code, not in the model's head.
+log "filtering signals against URL ledgers"
+if ! uv run sources/filter_signals.py .tmp/signals_raw.md \
+       > .tmp/signals.md 2>"$LOG_DIR/filter-signals.err"; then
+  log "ERROR: filter_signals failed. See $LOG_DIR/filter-signals.err"
+  exit 1
+fi
+if [[ ! -s .tmp/signals.md ]]; then
+  log "ERROR: every scout signal was filtered out (seen or unfetchable)."
+  log "       See $LOG_DIR/filter-signals.err"
+  exit 1
+fi
+signals_raw=$(grep -c '^## Signal ' .tmp/signals_raw.md || true)
+signals_kept=$(grep -c '^## Signal ' .tmp/signals.md || true)
+log "signals: ${signals_kept}/${signals_raw} kept after ledger filter"
 
 # 4. Plan (no tools): rank scout signals into card slots with committed URLs.
 log "plan stage: ${PI_PROVIDER}/${PI_MODEL} (caps T=${TRACKED} A=${ADJACENT} B=${BRIDGE} F=${FOLLOWUP})"
@@ -237,6 +260,7 @@ rm -rf .tmp/expand
 mkdir -p .tmp/expand
 MANIFEST_FILE=".tmp/expand/manifest.tsv"
 if ! uv run sources/split_plan.py .tmp/plan.md .tmp/expand \
+       --signals .tmp/signals.md \
        > "$MANIFEST_FILE" 2>"$LOG_DIR/split-plan.err"; then
   log "ERROR: split_plan failed. See $LOG_DIR/split-plan.err"
   exit 1
@@ -288,10 +312,16 @@ done < "$MANIFEST_FILE"
 } > "$OUT"
 
 # 5c. Aggregate dropped slots into logs (never into the delivered brief).
+# Split-stage drops (plan slot whose Source URL failed verification
+# against the signal sheet) come first; they never reached the manifest.
 dropped_count=0
+split_dropped=$(grep -c '^DROPPED ' "$LOG_DIR/split-plan.err" || true)
 {
   echo "# Dropped slots ${RUN_ID}"
   echo
+  if [[ "${split_dropped:-0}" -gt 0 ]]; then
+    grep '^DROPPED ' "$LOG_DIR/split-plan.err" | sed 's/^DROPPED /- /'
+  fi
   while IFS=$'\t' read -r slot_id slot_tag; do
     body=".tmp/expand/$slot_id/body.md"
     err=".tmp/expand/$slot_id/err.log"
@@ -312,11 +342,11 @@ dropped_count=0
       dropped_count=$((dropped_count + 1))
     fi
   done < "$MANIFEST_FILE"
-  if [[ "$dropped_count" -eq 0 ]]; then
+  if [[ "$dropped_count" -eq 0 && "${split_dropped:-0}" -eq 0 ]]; then
     echo "(none)"
   fi
 } > "$LOG_DIR/dropped.md"
-log "expand drops: ${dropped_count}/${SLOT_COUNT}"
+log "expand drops: ${dropped_count}/${SLOT_COUNT} (split-stage drops: ${split_dropped:-0})"
 
 # 6. Aggregate summary
 {
@@ -329,6 +359,7 @@ log "expand drops: ${dropped_count}/${SLOT_COUNT}"
   echo "- session archive: \`${SESSION_DIR}/\`"
   echo "- card caps: tracked=${TRACKED} adjacent=${ADJACENT} bridge=${BRIDGE} followup=${FOLLOWUP}"
   echo "- scout caps: interests=${SCOUT_MAX_INTERESTS} queries=${SCOUT_QUERIES_PER_INTEREST}"
+  echo "- signals: raw=${signals_raw} kept=${signals_kept} (ledger filter)"
   echo "- expand: slots=${SLOT_COUNT} parallel=${EXPAND_PARALLEL} drops=${dropped_count}"
   echo
   [[ -f "$LOG_DIR/distill.log.md" ]] && cat "$LOG_DIR/distill.log.md"
@@ -347,6 +378,16 @@ fi
 # 8. Dedup + deliver
 log "appending seen URLs"
 uv run sources/append_seen.py "$OUT" >> memory/seen_urls.jsonl
+
+# Record Source URLs of fetch-failed slots so filter_signals excludes
+# them from future runs. This runs only after the all-dropped bail
+# above: if every slot dropped, the cause is usually systemic (e.g. a
+# missing BRAVE_API_KEY), and recording those URLs would wrongly ban
+# good sources.
+log "recording unfetchable URLs"
+uv run sources/append_unfetchable.py .tmp/expand \
+  2>"$LOG_DIR/append-unfetchable.err" \
+  >> memory/unfetchable_urls.jsonl
 
 OUT_HTML="${OUT%.md}.html"
 log "rendering HTML"
