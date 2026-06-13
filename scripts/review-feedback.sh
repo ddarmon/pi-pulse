@@ -10,7 +10,8 @@
 #   scripts/review-feedback.sh RUN_ID           # one brief
 #   scripts/review-feedback.sh --include-rated  # revisit rated cards too
 #
-# Keys: 1=--  2=-  3=unrated  4=+  5=++   n=note  >=next  p=prev  q=quit
+# Keys (best to worst): 1=++  2=+  3==neutral  4=-  5=--
+#   u=unrated  n=note  >=next  p=prev  q=quit
 #
 # Makes zero model calls.
 

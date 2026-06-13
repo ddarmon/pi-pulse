@@ -45,7 +45,7 @@ def load_rows(ledger: Path, cutoff: date) -> list[dict]:
 
 
 def fmt(row: dict) -> str:
-    mark = {2: "++", 1: "+", -1: "-", -2: "--"}.get(row.get("rating"), "?")
+    mark = {2: "++", 1: "+", 0: "=", -1: "-", -2: "--"}.get(row.get("rating"), "?")
     tag = row.get("tag", "")
     note = row.get("note", "")
     line = f"- [{row.get('date', '')}] ({mark}) {row.get('title', '')}"
@@ -58,6 +58,7 @@ def fmt(row: dict) -> str:
 
 def render(rows: list[dict], days: int) -> str:
     valued = sorted([r for r in rows if r.get("rating", 0) > 0], key=lambda r: r.get("rating", 0), reverse=True)
+    neutral = [r for r in rows if r.get("rating") == 0]
     disliked = [r for r in rows if r.get("rating", 0) < 0]
     avoid = [r for r in rows if r.get("rating", 0) == -2]
 
@@ -76,6 +77,7 @@ def render(rows: list[dict], days: int) -> str:
         out.append("")
 
     section("## Valued (more like this)", valued)
+    section("## Neutral (reviewed, no strong opinion)", neutral)
     section("## Not valued (less like this)", disliked)
     section("## Avoid candidates (rated [--])", avoid)
     return "\n".join(out)

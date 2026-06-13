@@ -35,7 +35,10 @@ RATING_LINE = re.compile(r"^\[(?P<mark>[^\]]*)\]\s*(?P<num>\d+)\s+(?P<title>.*\S
 NOTE_LINE = re.compile(r"^\s+note:\s*(?P<note>.*\S)\s*$", re.IGNORECASE)
 TAG_SUFFIX = re.compile(r"\((tracked|adjacent|bridge|follow-up)\)\s*$", re.IGNORECASE)
 
-MARKS = {"++": 2, "+": 1, "-": -1, "--": -2}
+# Rated states. "=" is an explicit neutral (reviewed, no strong opinion)
+# and is distinct from unrated -- an empty/space bracket -- which is
+# skipped entirely (not yet reviewed). Neutral produces a rating-0 row.
+MARKS = {"++": 2, "+": 1, "=": 0, "-": -1, "--": -2}
 
 
 def parse_cards(brief_md: str) -> list[dict]:
@@ -106,7 +109,7 @@ def main() -> int:
 
     today = date.today().isoformat()
     rows: list[dict] = []
-    counts = {2: 0, 1: 0, -1: 0, -2: 0}
+    counts = {2: 0, 1: 0, 0: 0, -1: 0, -2: 0}
     for r in rated:
         n = r["card"]
         if not (1 <= n <= len(cards)):
@@ -152,7 +155,7 @@ def main() -> int:
 
     print(
         f"ingested {len(rows)} ratings for {args.run_id} "
-        f"(++:{counts[2]} +:{counts[1]} -:{counts[-1]} --:{counts[-2]})",
+        f"(++:{counts[2]} +:{counts[1]} =:{counts[0]} -:{counts[-1]} --:{counts[-2]})",
         file=sys.stderr,
     )
     return 0

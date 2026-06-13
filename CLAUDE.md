@@ -129,7 +129,8 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 Each run emits `out/${RUN_ID}.feedback.md`: one numbered line per
 delivered card (card N is the Nth `## ` heading in the brief), each
 prefixed with an editable mark. The reader edits the marks
-(`[++]`/`[+]`/`[ ]`/`[-]`/`[--]`, optional indented `note:` line) by hand
+(best-to-worst `[++]`/`[+]`/`[=]`/`[-]`/`[--]`, plus `[ ]`; optional
+indented `note:` line) by hand
 or via the interactive reviewer `scripts/review-feedback.sh` (a
 zero-dependency single-keypress TUI, `sources/review_feedback.py`, that
 shows each card's prose from the brief and writes marks back to the
@@ -146,8 +147,11 @@ recover its title, normalized primary URL, and tag, then writes rows to
 drops a run's existing rows before re-adding, so sweeping all files
 every run is safe (unedited files contribute zero rows; already-ingested
 rows are replaced, not duplicated). It then rebuilds
-`.tmp/feedback_recent.md` (last 14 days, grouped valued / not-valued /
-avoid-candidates) via `build_feedback_digest.py`. The whole path makes
+`.tmp/feedback_recent.md` (last 14 days, grouped valued / neutral /
+not-valued / avoid-candidates) via `build_feedback_digest.py`. `[=]`
+neutral is a distinct *rated* state (rating 0: reviewed, no strong
+opinion) and produces a ledger row; `[ ]` unrated means not yet
+reviewed and is skipped. The whole path makes
 **zero model calls**. Note a run cannot ingest its *own* feedback file
 (written at deliver, all-unrated at that point) -- today's edits are
 swept up by tomorrow's run.

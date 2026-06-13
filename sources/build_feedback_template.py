@@ -30,13 +30,16 @@ HEADER = """\
 #
 # Edit the marks below, then run:  scripts/ingest-feedback.sh {run_id}
 #
-# Marks:  [++] excellent   [+] useful   [ ] skip (unrated)
-#         [-] not interesting   [--] don't want this topic
+# Marks (best to worst):  [++] excellent   [+] useful   [=] neutral
+#                         [-] not interesting   [--] don't want this topic
+#
+# [ ] means unrated (not yet reviewed) and is skipped by ingest;
+# [=] means reviewed with no strong opinion and is recorded (rating 0).
 #
 # Optionally add a note on an indented line beneath any card:
 #     note: free text here
 #
-# Lines starting with # are ignored. Unrated ([ ]) cards are skipped.
+# Lines starting with # are ignored.
 """
 
 

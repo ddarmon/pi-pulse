@@ -11,12 +11,16 @@ Default queue is every still-unrated card across all briefs, oldest
 first, so a backlog clears in one sitting. Pass a RUN_ID to review just
 one brief, or --include-rated to revisit cards you already marked.
 
-Keys:
-    1  rate --   (don't want)        4  rate +   (useful)
-    2  rate -    (not interesting)   5  rate ++  (excellent)
-    3  set unrated and advance       n  add/replace a note
+Keys (best to worst):
+    1  rate ++  (excellent)          4  rate -   (not interesting)
+    2  rate +   (useful)             5  rate --  (don't want)
+    3  rate =   (neutral: reviewed,  u  set unrated (not reviewed)
+                 no strong opinion)  n  add/replace a note
     > / space / enter  next          p / <   previous
     q  quit
+
+Unrated ([ ]) means not yet reviewed and is skipped by ingest; neutral
+([=]) means reviewed with no strong opinion and is recorded as rating 0.
 
 Usage:
     review_feedback.py [RUN_ID] [--include-rated] [--out-dir DIR]
@@ -35,12 +39,13 @@ from pathlib import Path
 
 from ingest_feedback import CARD_HEADING, NOTE_LINE, RATING_LINE, TAG_SUFFIX
 
-VALID_MARKS = {"++", "+", "-", "--"}
-KEY_TO_MARK = {"1": "--", "2": "-", "3": "", "4": "+", "5": "++"}
+VALID_MARKS = {"++", "+", "=", "-", "--"}
+KEY_TO_MARK = {"1": "++", "2": "+", "3": "=", "4": "-", "5": "--"}
 MARK_LABEL = {
-    "": "unrated",
+    "": "unrated (not yet reviewed)",
     "++": "excellent",
     "+": "useful",
+    "=": "neutral",
     "-": "not interesting",
     "--": "don't want this topic",
 }
@@ -146,7 +151,7 @@ def render(run_id: str, file_pos: int, file_total: int, qpos: int, qtotal: int, 
         "",
         f"Current rating: [{mark or ' '}] {MARK_LABEL[mark]}" + (f"   note: {note}" if note else ""),
         rule,
-        "[1]--  [2]-  [3]unrated  [4]+  [5]++    n=note   >=next  p=prev  q=quit",
+        "[1]++  [2]+  [3]=neutral  [4]-  [5]--    u=unrated  n=note  >=next  p=prev  q=quit",
     ]
     sys.stdout.write("\n".join(lines) + "\n")
     sys.stdout.flush()
@@ -223,6 +228,11 @@ def main() -> int:
         ch = getch()
         if ch in KEY_TO_MARK:
             entry["mark"] = KEY_TO_MARK[ch]
+            write(run_id)
+            rated += 1
+            i += 1
+        elif ch == "u":
+            entry["mark"] = ""
             write(run_id)
             rated += 1
             i += 1
