@@ -396,11 +396,25 @@ if ! uv run sources/render_html.py "$OUT" "$OUT_HTML" 2>"$LOG_DIR/render_html.er
   OUT_HTML=""
 fi
 
+# Feedback companion file: numbered card list the reader edits with
+# rating marks, then ingests via scripts/ingest-feedback.sh. Generation
+# is non-fatal; a failure here must not sink a delivered brief.
+FEEDBACK="${OUT%.md}.feedback.md"
+log "writing feedback template"
+if ! uv run sources/build_feedback_template.py "$OUT" "$FEEDBACK" \
+     2>"$LOG_DIR/feedback-template.err"; then
+  log "WARN: feedback template failed; see $LOG_DIR/feedback-template.err"
+  FEEDBACK=""
+fi
+
 if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
   log "copying brief to $PI_PULSE_DELIVERY"
   cp "$OUT" "$PI_PULSE_DELIVERY/${RUN_ID}.md"
   if [[ -n "$OUT_HTML" && -f "$OUT_HTML" ]]; then
     cp "$OUT_HTML" "$PI_PULSE_DELIVERY/${RUN_ID}.html"
+  fi
+  if [[ -n "$FEEDBACK" && -f "$FEEDBACK" ]]; then
+    cp "$FEEDBACK" "$PI_PULSE_DELIVERY/${RUN_ID}.feedback.md"
   fi
 fi
 

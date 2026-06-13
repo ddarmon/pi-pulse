@@ -45,6 +45,16 @@ cheap. Still gate behind an env var (`PI_PULSE_SUGGEST_PROFILE=1`) so
 the user opts in; auto-applying profile edits would be a trust step
 the user hasn't taken yet.
 
+**Revised cadence (2026-06-13).** The decision is to run this *weekly*,
+not per-run, and to feed it three inputs: the week's archived distill
+memos, the current profile, and the new feedback digest
+(`.tmp/feedback_recent.md`, see "Recently shipped: feedback loop").
+Per-run suggestion was judged too noisy. The memo is not yet archived
+per-run -- the weekly stage needs `pulse.sh` to `cp
+.tmp/interests_today.md "$LOG_DIR/memo.md"` after distill (falls back to
+`out/*.md` until ~7 memos accumulate). Still proposals-only;
+`scripts/apply-updates.sh` stays the human gate.
+
 ### 2. Strict citation verify-then-include (defer)
 
 Scout now commits every card's `Source URL` upstream, and expand's
@@ -58,6 +68,26 @@ case has surfaced yet. Revisit if a future audit finds a card whose
 URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
+
+-   **Feedback loop (2026-06-13).** Each run now emits
+    `out/${RUN_ID}.feedback.md`: one numbered line per delivered card
+    (card N = Nth `## ` heading in the brief), each with an editable
+    mark. The reader marks `[++]`/`[+]`/`[ ]`/`[-]`/`[--]` (optional
+    indented `note:`) and runs `scripts/ingest-feedback.sh [RUN_ID]`.
+    Ingest re-joins each rated card against the brief to recover title,
+    normalized primary URL (shared `append_seen.normalize`), and tag,
+    then writes idempotent rows to `memory/feedback.jsonl` (drops a
+    run's existing rows before re-adding, so re-edit/re-ingest is safe)
+    and rebuilds `.tmp/feedback_recent.md` (last 14 days, grouped
+    valued / not-valued / avoid-candidates) via
+    `build_feedback_digest.py`. **Zero model calls** -- pure local
+    bookkeeping. New files: `sources/build_feedback_template.py`,
+    `sources/ingest_feedback.py`, `sources/build_feedback_digest.py`,
+    `scripts/ingest-feedback.sh`. `pulse.sh` generates + delivers the
+    companion file (non-fatal). Nothing in the daily pipeline consumes
+    the digest yet -- it is the intended input to backlog item 1
+    (weekly profile-suggest). `[--]` does not auto-suppress topics; it
+    only flags avoid-candidates for the weekly review.
 
 -   **Deterministic hard predicates (2026-06-11).** Three checks that
     were prompt-level promises are now code. (1)

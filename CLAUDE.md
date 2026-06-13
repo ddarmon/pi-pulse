@@ -69,7 +69,11 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     `out/${RUN_ID}.html` from the
     markdown via `sources/render_html.py` (pandoc preferred, Python
     `markdown` fallback, MathJax loaded only when math is detected);
-    copy both `.md` and `.html` to `$PI_PULSE_DELIVERY` if set.
+    write an editable feedback companion file at
+    `out/${RUN_ID}.feedback.md` via
+    `sources/build_feedback_template.py` (one numbered line per
+    delivered card; generation is non-fatal); copy `.md`, `.html`, and
+    `.feedback.md` to `$PI_PULSE_DELIVERY` if set.
 
 ## Cost and runtime awareness
 
@@ -89,10 +93,10 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
     placeholders in pulse.sh with `sed`, not `envsubst`. The launchd
     template uses the same double-brace convention.
 -   **No personal data in committed files.** `memory/interests.md`,
-    `memory/seen_urls.jsonl`, `memory/unfetchable_urls.jsonl`, `out/`,
-    `logs/`, `.pulse-sessions/`, `.env`, and
-    `memory/interests.md.local` are all gitignored. The `.example`
-    and `.template` counterparts are committed.
+    `memory/seen_urls.jsonl`, `memory/unfetchable_urls.jsonl`,
+    `memory/feedback.jsonl`, `out/`, `logs/`, `.pulse-sessions/`,
+    `.env`, and `memory/interests.md.local` are all gitignored. The
+    `.example` and `.template` counterparts are committed.
 -   **Pi-call count is variable.** `pulse.sh` invokes `pi` for distill,
     scout, plan, and once per planned card slot in parallel expand
     (capped by `PI_PULSE_EXPAND_PARALLEL`). This is the source-first
@@ -119,6 +123,25 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 -   **Commit messages.** Imperative subject, body explains motivation
     and surfaces what evidence drove the change. No `Co-Authored-By`
     lines (per global CLAUDE.md). No emoji.
+
+## Feedback loop
+
+Each run emits `out/${RUN_ID}.feedback.md`: one numbered line per
+delivered card (card N is the Nth `## ` heading in the brief), each
+prefixed with an editable mark. The reader edits the marks
+(`[++]`/`[+]`/`[ ]`/`[-]`/`[--]`, optional indented `note:` line) and
+runs `scripts/ingest-feedback.sh [RUN_ID]` (defaults to the newest
+feedback file). Ingest re-joins each rated card against the brief to
+recover its title, normalized primary URL, and tag, then writes rows to
+`memory/feedback.jsonl` (gitignored). Ingest is **idempotent** -- it
+drops a run's existing rows before re-adding, so you can re-edit and
+re-ingest. It then rebuilds `.tmp/feedback_recent.md` (last 14 days,
+grouped valued / not-valued / avoid-candidates) via
+`build_feedback_digest.py`. The whole path makes **zero model calls**.
+The digest is the intended input to a future weekly profile-suggest
+stage; nothing consumes it in the daily pipeline yet. Unrated (`[ ]`)
+cards are skipped; `[--]` does not auto-suppress a topic (the URL is
+already in `seen_urls.jsonl`), it only flags an avoid-candidate.
 
 ## Debugging a run
 
