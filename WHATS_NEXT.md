@@ -24,36 +24,17 @@ awareness. This file picks up where that ends.
 
 ## Remaining backlog
 
-### 1. Auto-suggest profile updates after each run
+### 1. Profile-suggest cron (optional follow-up)
 
-After `expand`, run a small additional pi call (no tools) that reads
-`.tmp/interests_today.md` and `memory/interests.md` and proposes 0--3
-small additions or edits to the profile. Write proposals to
-`.tmp/profile_updates.md` plus a one-line note in
-`logs/YYYY-MM-DD/summary.md` ("3 suggested profile updates pending;
-review with `scripts/apply-updates.sh`").
-
-**Do NOT auto-apply.** Build a separate `scripts/apply-updates.sh` that
-lets the user accept or reject each suggestion individually, reusing the
-snapshot/diff pattern from `scripts/interview.sh` (snapshot to
-`memory/interests-history/YYYY-MM-DD-HHMM.md` before any write).
-
-Cost: adds one more pi call per run. The pipeline already runs `3 + N`
-pi calls (distill, scout, plan, one per parallel expand slot) under the
-unlimited-Ollama operating assumption, so an extra serial call is
-cheap. Still gate behind an env var (`PI_PULSE_SUGGEST_PROFILE=1`) so
-the user opts in; auto-applying profile edits would be a trust step
-the user hasn't taken yet.
-
-**Revised cadence (2026-06-13).** The decision is to run this *weekly*,
-not per-run, and to feed it three inputs: the week's archived distill
-memos, the current profile, and the new feedback digest
-(`.tmp/feedback_recent.md`, see "Recently shipped: feedback loop").
-Per-run suggestion was judged too noisy. The memo is not yet archived
-per-run -- the weekly stage needs `pulse.sh` to `cp
-.tmp/interests_today.md "$LOG_DIR/memo.md"` after distill (falls back to
-`out/*.md` until ~7 memos accumulate). Still proposals-only;
-`scripts/apply-updates.sh` stays the human gate.
+The weekly profile-suggest core shipped manual-first (see "Recently
+shipped: profile-suggest" below). The remaining optional piece is
+automation: a launchd weekly template (mirroring
+`launchd/com.user.pi-pulse.plist.template`, double-brace convention)
+that runs `scripts/suggest-profile.sh` every Sunday, plus a one-line
+"N profile suggestions pending" note in `pulse.sh`'s summary when
+`.tmp/profile_updates.md` is newer than `interests.md`. Deferred
+deliberately until the user has seen a few weeks of proposals and trusts
+their quality; `apply-updates.sh` stays the human gate either way.
 
 ### 2. Strict citation verify-then-include (defer)
 
@@ -68,6 +49,27 @@ case has surfaced yet. Revisit if a future audit finds a card whose
 URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
+
+-   **Profile-suggest, core (2026-06-13).** Weekly, human-gated
+    surfacing of drift between `memory/interests.md` and recent
+    activity. `pulse.sh` step 2b archives each distill memo to
+    `logs/${RUN_ID}/memo.md`. `scripts/suggest-profile.sh [DAYS]`
+    (default 7) refreshes the feedback digest, builds an input bundle
+    (`sources/build_suggest_input.py`: last N days of memos, falling
+    back to recent `out/*.md` briefs until memos accrue, plus
+    `.tmp/feedback_recent.md`), and runs one no-tools `pi` call on
+    `prompts/suggest_profile.md` -> 0--6 machine-parseable
+    `ADD`/`EDIT`/`DEMOTE` proposals in `.tmp/profile_updates.md`.
+    `scripts/apply-updates.sh` (`sources/apply_updates.py`) walks them
+    interactively, snapshots the profile to `memory/interests-history/`
+    before any write, applies ADDs (append under section) and
+    EDIT/DEMOTE (whitespace-normalized bullet match so wrapped bullets
+    match; ambiguous/missing targets reported, never guessed), and
+    prints a diff. Pure parse/apply functions are unit-tested (ADD under
+    correct section, EDIT replaces a 4-line wrapped bullet, DEMOTE
+    removes, bad target deferred, snapshot equals pre-edit profile).
+    Built manual-first; no cron yet (backlog item 1). Decoupled from
+    `pulse.sh` apart from the memo archive.
 
 -   **Feedback loop (2026-06-13).** Each run now emits
     `out/${RUN_ID}.feedback.md`: one numbered line per delivered card

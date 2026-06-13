@@ -192,6 +192,10 @@ if [[ ! -s .tmp/interests_today.md ]]; then
   exit 1
 fi
 
+# 2b. Archive this run's memo so the weekly profile-suggest stage has a
+# per-run history to read (logs/ is gitignored and keyed on RUN_ID).
+cp .tmp/interests_today.md "$LOG_DIR/memo.md"
+
 # 3. Scout (web search/fetch enabled): discover fresh primary sources
 # per interest cluster, emit structured signals.md.
 log "scout stage: ${PI_PROVIDER}/${PI_MODEL} (interests<=${SCOUT_MAX_INTERESTS} queries<=${SCOUT_QUERIES_PER_INTEREST})"
