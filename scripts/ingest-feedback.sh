@@ -41,16 +41,6 @@ sync_from_delivery() {
   fi
 }
 
-ingest_one() {
-  local run_id="$1"
-  sync_from_delivery "$run_id"
-  if [[ ! -f "out/${run_id}.feedback.md" ]]; then
-    echo "ERROR: out/${run_id}.feedback.md not found." >&2
-    return 1
-  fi
-  uv run sources/ingest_feedback.py "$run_id"
-}
-
 MODE="${1:-}"
 
 if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
@@ -64,11 +54,20 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
     echo "[ingest] no feedback files; digest refreshed."
     exit 0
   fi
+  # Bash only does the cheap delivery-sync (no process spawn); the ingest
+  # itself runs as a single Python process over all files -- not one
+  # `uv run` per file, which used to cost ~0.7s of startup each.
   for f in "${files[@]}"; do
-    ingest_one "$(basename "$f" .feedback.md)"
+    sync_from_delivery "$(basename "$f" .feedback.md)"
   done
+  uv run sources/ingest_feedback.py --all
 else
-  ingest_one "$MODE"
+  sync_from_delivery "$MODE"
+  if [[ ! -f "out/${MODE}.feedback.md" ]]; then
+    echo "ERROR: out/${MODE}.feedback.md not found." >&2
+    exit 1
+  fi
+  uv run sources/ingest_feedback.py "$MODE"
 fi
 
 uv run sources/build_feedback_digest.py
