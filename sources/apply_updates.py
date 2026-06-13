@@ -41,6 +41,10 @@ def norm(s: str) -> str:
 
 
 def parse_proposals(text: str) -> list[dict]:
+    # The model sometimes wraps the whole output in a ``` code fence
+    # (it imitates the format example in the prompt). Strip any fence
+    # lines so the blocks below start cleanly with `PROPOSAL:`.
+    text = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("```"))
     if re.search(r"^NO PROPOSALS", text, re.MULTILINE):
         return []
     blocks = re.split(r"^---\s*$", text, flags=re.MULTILINE)

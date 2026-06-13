@@ -50,6 +50,10 @@ digest as candidate **AVOID** additions, emitted as an ADD targeting the
 
 ## Output format
 
+Output the proposal blocks as raw text. Do **not** wrap them in a
+markdown code fence (no ```). Do not deliberate at length first -- read
+the inputs and emit the blocks directly.
+
 Emit each proposal as a block in exactly this format, separated by a
 line containing only `---`:
 

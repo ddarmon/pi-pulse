@@ -27,11 +27,14 @@ fi
 
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
 PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
-# This task is mechanical extraction/comparison, not deep reasoning. With
-# the model's default thinking level, kimi burned its entire 16,384-token
-# output budget on reasoning and emitted no proposals. Keep thinking low
-# so the budget goes to content. Override with PI_SUGGEST_THINKING.
-THINKING="${PI_SUGGEST_THINKING:-low}"
+# This task is mechanical extraction/comparison, not deep reasoning. At
+# the model's default thinking level kimi burned its entire 16,384-token
+# output budget on reasoning (~72k chars) and emitted no/truncated
+# proposals. `low` did not help (still ~72k chars of thinking); only
+# `off` actually suppresses it (verified: ~130 chars on a trivial call),
+# leaving the whole output budget for proposals. Override with
+# PI_SUGGEST_THINKING if a future model needs some reasoning.
+THINKING="${PI_SUGGEST_THINKING:-off}"
 DAYS="${1:-${PI_PULSE_SUGGEST_DAYS:-7}}"
 TS=$(date +%Y-%m-%d-%H%M)
 SESSION_DIR=".pulse-sessions/suggest/${TS}"
