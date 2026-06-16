@@ -102,6 +102,17 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
     (capped by `PI_PULSE_EXPAND_PARALLEL`). This is the source-first
     pipeline; it relies on an unlimited Ollama subscription. If the
     provider changes, reintroduce a hard call budget in `pulse.sh`.
+-   **Per-stage model selection.** Each stage (distill, scout, plan,
+    expand) takes independent `PI_PULSE_<STAGE>_{MODEL,PROVIDER,THINKING}`
+    overrides, each falling back to the global `PI_MODEL`/`PI_PROVIDER`
+    (default `ollama`/`kimi-k2.6:cloud`). This exists because kimi
+    saturates its output on the harder synthesis prompts (distill, plan)
+    -- it emits a `thinking` block and no answer text, so the stage writes
+    0 bytes and the run aborts. The local `.env` therefore points
+    distill+plan at `minimax-m3:cloud` (survives synthesis, works through
+    pi as-is) while scout+expand stay on kimi (proven and faster on the
+    tool loops). `*_THINKING` is wired but inert for kimi via Ollama (pi
+    cannot send a working "off" over the OpenAI-compat endpoint).
 -   **Card quotas are caps, not targets** (except the bridge
     minimum). Plan emits fewer cards when scout returns fewer grounded
     signals. A short, fully grounded brief is the goal -- never
