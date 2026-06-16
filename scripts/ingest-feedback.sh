@@ -19,7 +19,40 @@
 # This makes zero model calls -- it is pure local bookkeeping.
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+
+# --- TEMPORARY cwd diagnostic (remove once the orphaning is root-caused) ---
+# `uv` aborts with "Current directory does not exist" when getcwd() fails,
+# i.e. the directory this process is anchored to has been unlinked/replaced
+# mid-run. `stat .` still reports the cwd's inode even when getcwd() fails,
+# so comparing it to the live inode at the expected path reveals an
+# orphaning (MISMATCH) or deletion (getcwd ERR) the instant it happens.
+# Logs to $PI_PULSE_PROBE_LOG (set by pulse.sh) or stderr when run by hand.
+cwd_probe() {  # $1=label  $2=expected-path (default: $PWD)
+  local label="$1" exp="${2:-${PWD:-/}}" getcwd cwd_ino exp_ino match
+  getcwd="$(/bin/pwd -P 2>&1)" || getcwd="ERR:${getcwd}"
+  cwd_ino="$(/usr/bin/stat -f '%i' . 2>&1)" || cwd_ino="ERR"
+  exp_ino="$(/usr/bin/stat -f '%i' "$exp" 2>&1)" || exp_ino="ERR"
+  match=$([[ "$cwd_ino" == "$exp_ino" ]] && echo match || echo MISMATCH)
+  printf '[probe %-9s] %s pid=%s ppid=%s pwd_env=%s getcwd=%s cwd_ino=%s exp_ino=%s %s\n' \
+    "$label" "$(date '+%H:%M:%S')" "$$" "$PPID" "${PWD:-<unset>}" \
+    "$getcwd" "$cwd_ino" "$exp_ino" "$match" \
+    >>"${PI_PULSE_PROBE_LOG:-/dev/stderr}"
+}
+# State of the cwd inherited from pulse.sh, before we cd anywhere:
+cwd_probe inherited
+# --- end TEMPORARY cwd diagnostic ---
+
+# Resolve the repo root to an absolute, canonical path up front. Under the
+# launchd 5am run the inherited working directory can go stale mid-run (its
+# inode is unlinked/replaced while we are cd'd in it): bash keeps working
+# because it re-resolves $PWD as a string, but a child `uv` calls getcwd(),
+# it fails, and uv aborts with "Current directory does not exist" before
+# Python runs -- silently breaking feedback ingest. Pinning ROOT and passing
+# it to every uv via `uv --directory` makes uv chdir to a live absolute path
+# itself, immune to the dead inherited cwd.
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+cd "$ROOT"
+cwd_probe after-cd "$ROOT"  # TEMPORARY: state right after we cd to ROOT
 
 if [[ -f .env ]]; then
   set -a
@@ -50,7 +83,8 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
   if [[ ${#files[@]} -eq 0 ]]; then
     # Nothing edited yet -- still refresh the digest so its window stays
     # current as old ratings roll off, then exit cleanly.
-    uv run sources/build_feedback_digest.py
+    cwd_probe pre-uv "$ROOT"  # TEMPORARY
+    uv --directory "$ROOT" run sources/build_feedback_digest.py
     echo "[ingest] no feedback files; digest refreshed."
     exit 0
   fi
@@ -60,16 +94,19 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
   for f in "${files[@]}"; do
     sync_from_delivery "$(basename "$f" .feedback.md)"
   done
-  uv run sources/ingest_feedback.py --all
+  cwd_probe pre-uv "$ROOT"  # TEMPORARY: state right before the failing uv
+  uv --directory "$ROOT" run sources/ingest_feedback.py --all
 else
   sync_from_delivery "$MODE"
   if [[ ! -f "out/${MODE}.feedback.md" ]]; then
     echo "ERROR: out/${MODE}.feedback.md not found." >&2
     exit 1
   fi
-  uv run sources/ingest_feedback.py "$MODE"
+  cwd_probe pre-uv "$ROOT"  # TEMPORARY
+  uv --directory "$ROOT" run sources/ingest_feedback.py "$MODE"
 fi
 
-uv run sources/build_feedback_digest.py
+cwd_probe pre-digest "$ROOT"  # TEMPORARY
+uv --directory "$ROOT" run sources/build_feedback_digest.py
 echo "[ingest] ledger: memory/feedback.jsonl"
 echo "[ingest] digest: .tmp/feedback_recent.md"

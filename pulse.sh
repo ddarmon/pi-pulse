@@ -201,6 +201,17 @@ uv run sources/build_recent_pulses.py --days "$HISTORY_DAYS" \
 # (it is written at deliver), so today's edits are picked up tomorrow.
 # Non-fatal: feedback bookkeeping must never sink a brief.
 log "sweeping card feedback"
+# TEMPORARY cwd diagnostic (remove once orphaning is root-caused): record
+# pulse.sh's own cwd liveness right before spawning the ingest child, then
+# let the child append its own probes to the same file. `stat .` reads the
+# cwd inode even when getcwd() fails, so a MISMATCH/ERR pinpoints when the
+# directory we are anchored to gets unlinked/replaced. See cwd_probe in
+# scripts/ingest-feedback.sh.
+export PI_PULSE_PROBE_LOG="$LOG_DIR/cwd-probe.log"
+printf '[probe %-9s] %s pid=%s pwd_env=%s getcwd=%s cwd_ino=%s exp_ino=%s\n' \
+  pulse-pre "$(date '+%H:%M:%S')" "$$" "${PWD:-<unset>}" \
+  "$(/bin/pwd -P 2>&1)" "$(/usr/bin/stat -f '%i' . 2>&1)" \
+  "$(/usr/bin/stat -f '%i' "$PWD" 2>&1)" >>"$PI_PULSE_PROBE_LOG" 2>&1 || true
 scripts/ingest-feedback.sh --all >"$LOG_DIR/ingest-feedback.log" 2>&1 \
   || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
 
