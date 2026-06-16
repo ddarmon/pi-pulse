@@ -43,6 +43,10 @@
 #                             current date-time as YYYY-MM-DD-HHMM)
 #   PI_PROVIDER               Pi provider (default: ollama)
 #   PI_MODEL                  Pi model    (default: kimi-k2.6:cloud)
+#   PI_PULSE_<STAGE>_MODEL    Per-stage model override (fallback: PI_MODEL)
+#   PI_PULSE_<STAGE>_PROVIDER Per-stage provider override (fallback: PI_PROVIDER)
+#   PI_PULSE_<STAGE>_THINKING Per-stage --thinking level (default: unset)
+#                             <STAGE> in DISTILL, SCOUT, PLAN, EXPAND
 #   PI_PULSE_NOTES_SINCE      Days of notes history (default: 30)
 #   PI_PULSE_SESH_SINCE       Days of sesh history  (default: 7)
 #   PI_PULSE_HISTORY_DAYS     Days of prior briefs for dedup (default: 7)
@@ -75,6 +79,32 @@ LOG_DIR="logs/${RUN_ID}"
 export RUN_ID
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
 PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
+
+# Per-stage model/provider/thinking overrides. Each falls back to the
+# global PI_PROVIDER/PI_MODEL, so with nothing set the four stages all run
+# on the global default (today's behavior). This lets distill/plan run on a
+# model that survives synthesis (e.g. minimax-m3:cloud) while scout/expand
+# stay on the tool-proven default. *_THINKING is empty by default (no
+# --thinking flag passed); note it is effectively inert for kimi via Ollama
+# (pi cannot send a working "off" through the OpenAI-compat endpoint).
+DISTILL_PROVIDER="${PI_PULSE_DISTILL_PROVIDER:-$PI_PROVIDER}"
+DISTILL_MODEL="${PI_PULSE_DISTILL_MODEL:-$PI_MODEL}"
+DISTILL_THINKING="${PI_PULSE_DISTILL_THINKING:-}"
+SCOUT_PROVIDER="${PI_PULSE_SCOUT_PROVIDER:-$PI_PROVIDER}"
+SCOUT_MODEL="${PI_PULSE_SCOUT_MODEL:-$PI_MODEL}"
+SCOUT_THINKING="${PI_PULSE_SCOUT_THINKING:-}"
+PLAN_PROVIDER="${PI_PULSE_PLAN_PROVIDER:-$PI_PROVIDER}"
+PLAN_MODEL="${PI_PULSE_PLAN_MODEL:-$PI_MODEL}"
+PLAN_THINKING="${PI_PULSE_PLAN_THINKING:-}"
+EXPAND_PROVIDER="${PI_PULSE_EXPAND_PROVIDER:-$PI_PROVIDER}"
+EXPAND_MODEL="${PI_PULSE_EXPAND_MODEL:-$PI_MODEL}"
+EXPAND_THINKING="${PI_PULSE_EXPAND_THINKING:-}"
+
+# Optional --thinking flags, present only when the stage's level is set.
+distill_think=(); [[ -n "$DISTILL_THINKING" ]] && distill_think=(--thinking "$DISTILL_THINKING")
+scout_think=();   [[ -n "$SCOUT_THINKING"   ]] && scout_think=(--thinking "$SCOUT_THINKING")
+plan_think=();    [[ -n "$PLAN_THINKING"    ]] && plan_think=(--thinking "$PLAN_THINKING")
+
 NOTES_SINCE="${PI_PULSE_NOTES_SINCE:-30}"
 SESH_SINCE="${PI_PULSE_SESH_SINCE:-7}"
 HISTORY_DAYS="${PI_PULSE_HISTORY_DAYS:-7}"
@@ -121,8 +151,12 @@ newest_session() {
 }
 
 # 0. Sanity: make sure ollama is up. Cloud-routed models still need the
-# local daemon to proxy.
-if [[ "$PI_PROVIDER" == "ollama" ]]; then
+# local daemon to proxy. Start it if any stage's resolved provider is ollama.
+needs_ollama=0
+for _prov in "$DISTILL_PROVIDER" "$SCOUT_PROVIDER" "$PLAN_PROVIDER" "$EXPAND_PROVIDER"; do
+  [[ "$_prov" == "ollama" ]] && needs_ollama=1
+done
+if [[ "$needs_ollama" == 1 ]]; then
   if ! curl -sf --max-time 3 http://127.0.0.1:11434/api/version >/dev/null; then
     log "ollama not reachable on 11434; starting in background"
     nohup ollama serve >/dev/null 2>&1 &
@@ -171,10 +205,11 @@ scripts/ingest-feedback.sh --all >"$LOG_DIR/ingest-feedback.log" 2>&1 \
   || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
 
 # 2. Distill (no tools)
-log "distill stage: ${PI_PROVIDER}/${PI_MODEL}"
+log "distill stage: ${DISTILL_PROVIDER}/${DISTILL_MODEL}${DISTILL_THINKING:+ thinking=$DISTILL_THINKING}"
 distill_start=$SECONDS
 pi -p "$(cat prompts/distill_context.md)" \
-   --provider "$PI_PROVIDER" --model "$PI_MODEL" \
+   --provider "$DISTILL_PROVIDER" --model "$DISTILL_MODEL" \
+   ${distill_think[@]+"${distill_think[@]}"} \
    --no-skills \
    --session-dir "$SESSION_DIR/distill" \
    @.tmp/chats_recent.md @.tmp/sesh_recent.md \
@@ -198,13 +233,14 @@ cp .tmp/interests_today.md "$LOG_DIR/memo.md"
 
 # 3. Scout (web search/fetch enabled): discover fresh primary sources
 # per interest cluster, emit structured signals.md.
-log "scout stage: ${PI_PROVIDER}/${PI_MODEL} (interests<=${SCOUT_MAX_INTERESTS} queries<=${SCOUT_QUERIES_PER_INTEREST})"
+log "scout stage: ${SCOUT_PROVIDER}/${SCOUT_MODEL}${SCOUT_THINKING:+ thinking=$SCOUT_THINKING} (interests<=${SCOUT_MAX_INTERESTS} queries<=${SCOUT_QUERIES_PER_INTEREST})"
 scout_start=$SECONDS
 SCOUT_PROMPT=$(sed -e "s|{{SCOUT_MAX_INTERESTS}}|${SCOUT_MAX_INTERESTS}|g" \
                    -e "s|{{SCOUT_QUERIES_PER_INTEREST}}|${SCOUT_QUERIES_PER_INTEREST}|g" \
                    prompts/scout_signals.md)
 pi -p "$SCOUT_PROMPT" \
-   --provider "$PI_PROVIDER" --model "$PI_MODEL" \
+   --provider "$SCOUT_PROVIDER" --model "$SCOUT_MODEL" \
+   ${scout_think[@]+"${scout_think[@]}"} \
    --session-dir "$SESSION_DIR/scout" \
    @.tmp/interests_today.md @memory/interests.md \
    @memory/seen_urls.jsonl @.tmp/recent_pulses.md \
@@ -242,7 +278,7 @@ signals_kept=$(grep -c '^## Signal ' .tmp/signals.md || true)
 log "signals: ${signals_kept}/${signals_raw} kept after ledger filter"
 
 # 4. Plan (no tools): rank scout signals into card slots with committed URLs.
-log "plan stage: ${PI_PROVIDER}/${PI_MODEL} (caps T=${TRACKED} A=${ADJACENT} B=${BRIDGE} F=${FOLLOWUP})"
+log "plan stage: ${PLAN_PROVIDER}/${PLAN_MODEL}${PLAN_THINKING:+ thinking=$PLAN_THINKING} (caps T=${TRACKED} A=${ADJACENT} B=${BRIDGE} F=${FOLLOWUP})"
 plan_start=$SECONDS
 PLAN_PROMPT=$(sed -e "s|{{TRACKED}}|${TRACKED}|g" \
                   -e "s|{{ADJACENT}}|${ADJACENT}|g" \
@@ -250,7 +286,8 @@ PLAN_PROMPT=$(sed -e "s|{{TRACKED}}|${TRACKED}|g" \
                   -e "s|{{FOLLOWUP}}|${FOLLOWUP}|g" \
                   prompts/compose_plan.md)
 pi -p "$PLAN_PROMPT" \
-   --provider "$PI_PROVIDER" --model "$PI_MODEL" \
+   --provider "$PLAN_PROVIDER" --model "$PLAN_MODEL" \
+   ${plan_think[@]+"${plan_think[@]}"} \
    --no-skills \
    --session-dir "$SESSION_DIR/plan" \
    @.tmp/signals.md @.tmp/interests_today.md \
@@ -285,11 +322,11 @@ if [[ "$SLOT_COUNT" -eq 0 ]]; then
   exit 1
 fi
 
-log "expand stage: ${PI_PROVIDER}/${PI_MODEL} (slots=${SLOT_COUNT} parallel=${EXPAND_PARALLEL})"
+log "expand stage: ${EXPAND_PROVIDER}/${EXPAND_MODEL}${EXPAND_THINKING:+ thinking=$EXPAND_THINKING} (slots=${SLOT_COUNT} parallel=${EXPAND_PARALLEL})"
 expand_start=$SECONDS
 export REPO_ROOT="$PWD"
 export EXPAND_DIR="$PWD/.tmp/expand"
-export SESSION_DIR PI_PROVIDER PI_MODEL
+export SESSION_DIR EXPAND_PROVIDER EXPAND_MODEL EXPAND_THINKING
 awk '{print $1}' "$MANIFEST_FILE" \
   | xargs -n1 -P "$EXPAND_PARALLEL" "$PWD/sources/expand_slot.sh"
 log "expand finished in $((SECONDS - expand_start))s"
