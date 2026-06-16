@@ -155,10 +155,48 @@ reviewed and is skipped. The whole path makes
 **zero model calls**. Note a run cannot ingest its *own* feedback file
 (written at deliver, all-unrated at that point) -- today's edits are
 swept up by tomorrow's run.
-The digest is the intended input to a future weekly profile-suggest
-stage; nothing consumes it in the daily pipeline yet. Unrated (`[ ]`)
-cards are skipped; `[--]` does not auto-suppress a topic (the URL is
-already in `seen_urls.jsonl`), it only flags an avoid-candidate.
+The digest is consumed by the profile-suggest stage (below). Unrated
+(`[ ]`) cards are skipped; `[--]` does not auto-suppress a topic (the URL
+is already in `seen_urls.jsonl`), it only flags an avoid-candidate.
+
+## Profile-suggest (weekly, manual)
+
+A human-gated weekly step that surfaces drift between the durable
+profile (`memory/interests.md`) and what the user has actually been
+doing. It is decoupled from `pulse.sh` (no daily-run latency); the only
+daily-run touch is step 2b archiving each memo to `logs/${RUN_ID}/memo.md`.
+
+`scripts/suggest-profile.sh [DAYS]` (default 7) refreshes the feedback
+digest, builds an input bundle via `sources/build_suggest_input.py`
+(last N days of archived memos, falling back to recent `out/*.md`
+briefs until memos accrue, plus `.tmp/feedback_recent.md`), and runs one
+no-tools `pi` call on `prompts/suggest_profile.md` to emit 0--6
+machine-parseable proposals (`ADD`/`EDIT`/`DEMOTE`) to
+`.tmp/profile_updates.md`. It never edits the profile.
+
+**This stage uses `gemma4:31b-cloud`, not the pipeline's
+`kimi-k2.6:cloud`** (override `PI_SUGGEST_MODEL`). This is load-bearing:
+kimi emits ~72k chars of inline chain-of-thought on this evaluative task
+regardless of `--thinking` (`off` only suppresses reasoning on trivial
+prompts), saturating the fixed 16,384-token output cap and emitting no or
+truncated proposals across three live runs. gemma4 is a non-reasoning
+instruct model that returned clean proposals in ~6s / ~450 output tokens.
+pi exposes no max-output-tokens flag, so a non-reasoning model is the
+fix. The brief fallback is also condensed to titles + lede
+(`build_suggest_input.condense_brief`) to keep the input compact. If you
+point `PI_SUGGEST_MODEL` at a reasoning model, set `PI_SUGGEST_THINKING`
+accordingly (default: unset, no `--thinking` flag passed).
+
+`scripts/apply-updates.sh` (-> `sources/apply_updates.py`) walks the
+proposals interactively (`y`/`n`/`q`), snapshots the profile to
+`memory/interests-history/` before any write (same pattern as
+`interview.sh`), applies accepted ADDs (append bullet under the named
+section) and EDIT/DEMOTE (locate the target bullet by
+whitespace-normalized match, so wrapped bullets match; ambiguous or
+missing targets are reported for manual handling, never guessed), and
+prints a unified diff. `--dry-run` shows changes without writing. Both
+scripts make zero model calls except the single suggest `pi` call.
+There is no cron yet -- run it weekly when convenient.
 
 ## Debugging a run
 
