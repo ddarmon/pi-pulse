@@ -96,6 +96,13 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
   # context with -v + backtrace and a full env dump, side by side with the
   # pulse-direct probe pulse.sh wrote, to finally see uv's actual error.
   { echo "===== ingest-child $(date '+%H:%M:%S') interp=${BASH:-?} ${BASH_VERSION:-?} pid=$$ ppid=$PPID ====="
+    # getcwd discriminator: run getcwd from several non-uv children of THIS
+    # child bash. If these succeed but uv fails, it is uv-specific; if they
+    # also fail, the child bash's cwd is broken for libc getcwd (not the
+    # __getcwd syscall /bin/pwd uses).
+    echo "GETCWD /bin/pwd:   $(/bin/pwd -P 2>&1)"
+    echo "GETCWD python3:    $(/usr/bin/python3 -c 'import os;print(os.getcwd())' 2>&1)"
+    echo "GETCWD perl:       $(/usr/bin/perl -MCwd -e 'print Cwd::getcwd()' 2>&1)"
     echo "uv: $(command -v uv)"
     RUST_BACKTRACE=full uv -v run python -c 'import os;print("CHILD_CWD",os.getcwd())' 2>&1
     echo "[ingest-child uv exit=$?]"

@@ -221,6 +221,11 @@ printf '[probe %-9s] %s pid=%s pwd_env=%s getcwd=%s cwd_ino=%s exp_ino=%s\n' \
 # probe (below) this isolates whether the child-script call site is the
 # differentiator and captures uv's actual error. Non-fatal.
 { echo "===== pulse-direct $(date '+%H:%M:%S') interp=${BASH:-?} ${BASH_VERSION:-?} pid=$$ ====="
+  # Same getcwd discriminators as the ingest child, in the context where uv
+  # works -- positive control for the side-by-side comparison.
+  echo "GETCWD /bin/pwd:   $(/bin/pwd -P 2>&1)"
+  echo "GETCWD python3:    $(/usr/bin/python3 -c 'import os;print(os.getcwd())' 2>&1)"
+  echo "GETCWD perl:       $(/usr/bin/perl -MCwd -e 'print Cwd::getcwd()' 2>&1)"
   echo "uv: $(command -v uv)"
   RUST_BACKTRACE=full uv -v run python -c 'import os;print("PULSE_DIRECT_CWD",os.getcwd())' 2>&1
   echo "[pulse-direct uv exit=$?]"; } >>"$PI_PULSE_DIAG_LOG" 2>&1 || true
