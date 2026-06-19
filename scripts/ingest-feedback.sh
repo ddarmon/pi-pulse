@@ -7,14 +7,20 @@
 #   scripts/ingest-feedback.sh --all     # explicit: all feedback files
 #   scripts/ingest-feedback.sh RUN_ID    # just one run
 #
-# Sweeping all files every run is safe: ingest is idempotent (a run's
-# rows are replaced, not duplicated) and unedited files contribute zero
-# rows. pulse.sh calls `--all` each run so you never have to run this by
-# hand -- edit marks whenever, and the next pulse picks them up.
+# Ingest is idempotent (a run's rows are replaced, not duplicated) and
+# unedited files contribute zero rows, so sweeping all files is safe.
 #
-# If PI_PULSE_DELIVERY is set and its copy of a feedback file is newer
-# than the one in out/ (i.e. you edited the delivered copy), the
-# delivered copy is synced back to out/ before ingest.
+# NOTE: pulse.sh does NOT call this script -- it ingests inline. Under
+# launchd, uv aborts "Current directory does not exist" when invoked from
+# this child script (a uv-specific quirk of the grandchild-of-launchd
+# process lineage; getcwd works fine for every other tool and the cwd is
+# healthy), but works when called directly from pulse.sh. This script
+# remains for MANUAL/interactive use, where it works fine, to pick up edits
+# immediately instead of waiting for the next run.
+#
+# If PI_PULSE_DELIVERY is set and its copy of a feedback file is newer than
+# the one in out/ (i.e. you edited the delivered copy), the delivered copy
+# is synced back to out/ before ingest.
 #
 # This makes zero model calls -- it is pure local bookkeeping.
 

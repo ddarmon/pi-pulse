@@ -42,7 +42,7 @@
 #   PI_PULSE_RUN_ID           Override the run identifier (default:
 #                             current date-time as YYYY-MM-DD-HHMM)
 #   PI_PROVIDER               Pi provider (default: ollama)
-#   PI_MODEL                  Pi model    (default: kimi-k2.6:cloud)
+#   PI_MODEL                  Pi model    (default: glm-5.2:cloud)
 #   PI_PULSE_<STAGE>_MODEL    Per-stage model override (fallback: PI_MODEL)
 #   PI_PULSE_<STAGE>_PROVIDER Per-stage provider override (fallback: PI_PROVIDER)
 #   PI_PULSE_<STAGE>_THINKING Per-stage --thinking level (default: unset)
@@ -78,15 +78,16 @@ SESSION_DIR=".pulse-sessions/${RUN_ID}"
 LOG_DIR="logs/${RUN_ID}"
 export RUN_ID
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
-PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
+PI_MODEL="${PI_MODEL:-glm-5.2:cloud}"
 
 # Per-stage model/provider/thinking overrides. Each falls back to the
 # global PI_PROVIDER/PI_MODEL, so with nothing set the four stages all run
-# on the global default (today's behavior). This lets distill/plan run on a
-# model that survives synthesis (e.g. minimax-m3:cloud) while scout/expand
-# stay on the tool-proven default. *_THINKING is empty by default (no
-# --thinking flag passed); note it is effectively inert for kimi via Ollama
-# (pi cannot send a working "off" through the OpenAI-compat endpoint).
+# on the global default (today's behavior). The recommended setup is a
+# single model across all stages (e.g. glm-5.2:cloud); the override knobs
+# exist so any stage can be pointed at a different model without touching
+# the others. *_THINKING is empty by default (no --thinking flag passed);
+# it is effectively inert for reasoning models served over Ollama's
+# OpenAI-compat endpoint (pi cannot send a working "off" through it).
 DISTILL_PROVIDER="${PI_PULSE_DISTILL_PROVIDER:-$PI_PROVIDER}"
 DISTILL_MODEL="${PI_PULSE_DISTILL_MODEL:-$PI_MODEL}"
 DISTILL_THINKING="${PI_PULSE_DISTILL_THINKING:-}"
@@ -200,8 +201,31 @@ uv run sources/build_recent_pulses.py --days "$HISTORY_DAYS" \
 # contribute nothing. This run's own feedback file does not exist yet
 # (it is written at deliver), so today's edits are picked up tomorrow.
 # Non-fatal: feedback bookkeeping must never sink a brief.
+#
+# Run INLINE here rather than via scripts/ingest-feedback.sh. Under launchd,
+# uv aborts "Current directory does not exist" only when invoked from that
+# child script -- a uv-specific quirk of the grandchild-of-launchd process
+# lineage (getcwd works fine for /bin/pwd, python3 and perl in the same
+# process; the cwd is healthy). The identical uv calls work when run
+# directly from pulse.sh, as the collect calls above already prove. The
+# child script stays for manual/interactive use, where it works.
 log "sweeping card feedback"
-scripts/ingest-feedback.sh --all >"$LOG_DIR/ingest-feedback.log" 2>&1 \
+{
+  # Pull back any edits made to the delivered copy when it is newer.
+  shopt -s nullglob; fbfiles=(out/*.feedback.md); shopt -u nullglob
+  for f in "${fbfiles[@]}"; do
+    rid="$(basename "$f" .feedback.md)"
+    if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
+      dfb="$PI_PULSE_DELIVERY/${rid}.feedback.md"
+      [[ -f "$dfb" && ( ! -f "$f" || "$dfb" -nt "$f" ) ]] && cp "$dfb" "$f"
+    fi
+  done
+  if (( ${#fbfiles[@]} )); then
+    uv run sources/ingest_feedback.py --all && uv run sources/build_feedback_digest.py
+  else
+    uv run sources/build_feedback_digest.py
+  fi
+} >"$LOG_DIR/ingest-feedback.log" 2>&1 \
   || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
 
 # 2. Distill (no tools)
