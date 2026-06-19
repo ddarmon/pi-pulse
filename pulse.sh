@@ -42,7 +42,7 @@
 #   PI_PULSE_RUN_ID           Override the run identifier (default:
 #                             current date-time as YYYY-MM-DD-HHMM)
 #   PI_PROVIDER               Pi provider (default: ollama)
-#   PI_MODEL                  Pi model    (default: kimi-k2.6:cloud)
+#   PI_MODEL                  Pi model    (default: glm-5.2:cloud)
 #   PI_PULSE_<STAGE>_MODEL    Per-stage model override (fallback: PI_MODEL)
 #   PI_PULSE_<STAGE>_PROVIDER Per-stage provider override (fallback: PI_PROVIDER)
 #   PI_PULSE_<STAGE>_THINKING Per-stage --thinking level (default: unset)
@@ -78,15 +78,16 @@ SESSION_DIR=".pulse-sessions/${RUN_ID}"
 LOG_DIR="logs/${RUN_ID}"
 export RUN_ID
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
-PI_MODEL="${PI_MODEL:-kimi-k2.6:cloud}"
+PI_MODEL="${PI_MODEL:-glm-5.2:cloud}"
 
 # Per-stage model/provider/thinking overrides. Each falls back to the
 # global PI_PROVIDER/PI_MODEL, so with nothing set the four stages all run
-# on the global default (today's behavior). This lets distill/plan run on a
-# model that survives synthesis (e.g. minimax-m3:cloud) while scout/expand
-# stay on the tool-proven default. *_THINKING is empty by default (no
-# --thinking flag passed); note it is effectively inert for kimi via Ollama
-# (pi cannot send a working "off" through the OpenAI-compat endpoint).
+# on the global default (today's behavior). The recommended setup is a
+# single model across all stages (e.g. glm-5.2:cloud); the override knobs
+# exist so any stage can be pointed at a different model without touching
+# the others. *_THINKING is empty by default (no --thinking flag passed);
+# it is effectively inert for reasoning models served over Ollama's
+# OpenAI-compat endpoint (pi cannot send a working "off" through it).
 DISTILL_PROVIDER="${PI_PULSE_DISTILL_PROVIDER:-$PI_PROVIDER}"
 DISTILL_MODEL="${PI_PULSE_DISTILL_MODEL:-$PI_MODEL}"
 DISTILL_THINKING="${PI_PULSE_DISTILL_THINKING:-}"
@@ -208,12 +209,44 @@ log "sweeping card feedback"
 # directory we are anchored to gets unlinked/replaced. See cwd_probe in
 # scripts/ingest-feedback.sh.
 export PI_PULSE_PROBE_LOG="$LOG_DIR/cwd-probe.log"
+export PI_PULSE_DIAG_LOG="$LOG_DIR/uv-diag.log"
 printf '[probe %-9s] %s pid=%s pwd_env=%s getcwd=%s cwd_ino=%s exp_ino=%s\n' \
   pulse-pre "$(date '+%H:%M:%S')" "$$" "${PWD:-<unset>}" \
   "$(/bin/pwd -P 2>&1)" "$(/usr/bin/stat -f '%i' . 2>&1)" \
   "$(/usr/bin/stat -f '%i' "$PWD" 2>&1)" >>"$PI_PULSE_PROBE_LOG" 2>&1 || true
-scripts/ingest-feedback.sh --all >"$LOG_DIR/ingest-feedback.log" 2>&1 \
-  || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
+# TEMPORARY uv diagnostic: ingest's uv aborts "Current directory does not
+# exist" under launchd, but pulse.sh's OWN collect uv calls succeed in the
+# same run with a provably healthy cwd. Run the same uv probe here, DIRECTLY
+# from pulse.sh, with verbose + backtrace -- side by side with the child's
+# probe (below) this isolates whether the child-script call site is the
+# differentiator and captures uv's actual error. Non-fatal.
+{ echo "===== pulse-direct $(date '+%H:%M:%S') interp=${BASH:-?} ${BASH_VERSION:-?} pid=$$ ====="
+  echo "uv: $(command -v uv)"
+  RUST_BACKTRACE=full uv -v run python -c 'import os;print("PULSE_DIRECT_CWD",os.getcwd())' 2>&1
+  echo "[pulse-direct uv exit=$?]"; } >>"$PI_PULSE_DIAG_LOG" 2>&1 || true
+if scripts/ingest-feedback.sh --all >"$LOG_DIR/ingest-feedback.log" 2>&1; then
+  :
+else
+  # WORKAROUND (pending root-cause): uv fails from the ingest child script
+  # under launchd but works when called directly from pulse.sh (like the
+  # collect calls). Re-run the --all sweep inline here, in pulse.sh's own
+  # context, so feedback is ingested regardless. Mirrors the child's logic.
+  log "WARN: ingest child script failed; running inline fallback (see $LOG_DIR/ingest-feedback.log)"
+  { echo "----- inline fallback $(date '+%H:%M:%S') -----"
+    shopt -s nullglob; fbfiles=(out/*.feedback.md); shopt -u nullglob
+    for f in "${fbfiles[@]}"; do
+      rid="$(basename "$f" .feedback.md)"
+      if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
+        dfb="$PI_PULSE_DELIVERY/${rid}.feedback.md"
+        [[ -f "$dfb" && ( ! -f "$f" || "$dfb" -nt "$f" ) ]] && cp "$dfb" "$f"
+      fi
+    done
+    (( ${#fbfiles[@]} )) && uv run sources/ingest_feedback.py --all
+    uv run sources/build_feedback_digest.py
+  } >>"$LOG_DIR/ingest-feedback.log" 2>&1 \
+    && log "inline ingest fallback succeeded" \
+    || log "WARN: inline ingest fallback ALSO failed; see $LOG_DIR/ingest-feedback.log"
+fi
 
 # 2. Distill (no tools)
 log "distill stage: ${DISTILL_PROVIDER}/${DISTILL_MODEL}${DISTILL_THINKING:+ thinking=$DISTILL_THINKING}"

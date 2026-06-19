@@ -42,14 +42,11 @@ cwd_probe() {  # $1=label  $2=expected-path (default: $PWD)
 cwd_probe inherited
 # --- end TEMPORARY cwd diagnostic ---
 
-# Resolve the repo root to an absolute, canonical path up front. Under the
-# launchd 5am run the inherited working directory can go stale mid-run (its
-# inode is unlinked/replaced while we are cd'd in it): bash keeps working
-# because it re-resolves $PWD as a string, but a child `uv` calls getcwd(),
-# it fails, and uv aborts with "Current directory does not exist" before
-# Python runs -- silently breaking feedback ingest. Pinning ROOT and passing
-# it to every uv via `uv --directory` makes uv chdir to a live absolute path
-# itself, immune to the dead inherited cwd.
+# Resolve the repo root to an absolute, canonical path. ROOT is used by the
+# cwd_probe comparisons and to normalize the cwd; the earlier
+# `uv --directory "$ROOT"` "fix" was REVERTED -- it did not work (the 06-17/
+# 06-18 probes proved the cwd is healthy when uv fails), so uv is called
+# plainly here, matching pulse.sh's collect calls that DO succeed.
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$ROOT"
 cwd_probe after-cd "$ROOT"  # TEMPORARY: state right after we cd to ROOT
@@ -84,7 +81,7 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
     # Nothing edited yet -- still refresh the digest so its window stays
     # current as old ratings roll off, then exit cleanly.
     cwd_probe pre-uv "$ROOT"  # TEMPORARY
-    uv --directory "$ROOT" run sources/build_feedback_digest.py
+    uv run sources/build_feedback_digest.py
     echo "[ingest] no feedback files; digest refreshed."
     exit 0
   fi
@@ -95,7 +92,16 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
     sync_from_delivery "$(basename "$f" .feedback.md)"
   done
   cwd_probe pre-uv "$ROOT"  # TEMPORARY: state right before the failing uv
-  uv --directory "$ROOT" run sources/ingest_feedback.py --all
+  # TEMPORARY verbose capture: reproduce the failing uv from THIS child-script
+  # context with -v + backtrace and a full env dump, side by side with the
+  # pulse-direct probe pulse.sh wrote, to finally see uv's actual error.
+  { echo "===== ingest-child $(date '+%H:%M:%S') interp=${BASH:-?} ${BASH_VERSION:-?} pid=$$ ppid=$PPID ====="
+    echo "uv: $(command -v uv)"
+    RUST_BACKTRACE=full uv -v run python -c 'import os;print("CHILD_CWD",os.getcwd())' 2>&1
+    echo "[ingest-child uv exit=$?]"
+    echo "----- env -----"; env | sort
+  } >>"${PI_PULSE_DIAG_LOG:-/dev/stderr}" 2>&1 || true
+  uv run sources/ingest_feedback.py --all
 else
   sync_from_delivery "$MODE"
   if [[ ! -f "out/${MODE}.feedback.md" ]]; then
@@ -103,10 +109,10 @@ else
     exit 1
   fi
   cwd_probe pre-uv "$ROOT"  # TEMPORARY
-  uv --directory "$ROOT" run sources/ingest_feedback.py "$MODE"
+  uv run sources/ingest_feedback.py "$MODE"
 fi
 
 cwd_probe pre-digest "$ROOT"  # TEMPORARY
-uv --directory "$ROOT" run sources/build_feedback_digest.py
+uv run sources/build_feedback_digest.py
 echo "[ingest] ledger: memory/feedback.jsonl"
 echo "[ingest] digest: .tmp/feedback_recent.md"
