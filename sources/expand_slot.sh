@@ -12,6 +12,8 @@
 #   EXPAND_PROVIDER, EXPAND_MODEL  pi backend selection for the expand stage
 #                    (fall back to PI_PROVIDER/PI_MODEL if unset)
 #   EXPAND_THINKING  optional pi --thinking level (empty = flag not passed)
+#   BRAVE_DIR        brave-search skill dir, substituted into {baseDir} in
+#                    the expand prompt so the model never has to find it
 #
 # Output:
 #   $EXPAND_DIR/$slot_id/body.md   card body (## heading + prose)
@@ -35,7 +37,7 @@ model="${EXPAND_MODEL:-${PI_MODEL:-kimi-k2.6:cloud}}"
 think_args=()
 [[ -n "${EXPAND_THINKING:-}" ]] && think_args=(--thinking "$EXPAND_THINKING")
 
-pi -p "$(cat prompts/compose_expand.md)" \
+pi -p "$(sed "s|{baseDir}|${BRAVE_DIR:-$HOME/.pi/agent/skills/brave-search}|g" prompts/compose_expand.md)" \
    --provider "$provider" --model "$model" \
    ${think_args[@]+"${think_args[@]}"} \
    --session-dir "$sess_dir" \

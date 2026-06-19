@@ -39,6 +39,9 @@
 #   PI_PULSE_NOTES_DIR        Directory tree of YYYY/MM/DD/*.md notes
 #   PI_PULSE_DELIVERY         Directory to copy the daily brief into
 #   PI_PULSE_ANKI_SEARCH      Path to anki_search.py (optional)
+#   PI_PULSE_BRAVE_DIR        brave-search skill dir, substituted into
+#                             {baseDir} in scout/expand prompts (default:
+#                             $HOME/.pi/agent/skills/brave-search)
 #   PI_PULSE_RUN_ID           Override the run identifier (default:
 #                             current date-time as YYYY-MM-DD-HHMM)
 #   PI_PROVIDER               Pi provider (default: ollama)
@@ -116,6 +119,12 @@ FOLLOWUP="${PI_PULSE_CARDS_FOLLOWUP:-1}"
 SCOUT_MAX_INTERESTS="${PI_PULSE_SCOUT_MAX_INTERESTS:-12}"
 SCOUT_QUERIES_PER_INTEREST="${PI_PULSE_SCOUT_QUERIES_PER_INTEREST:-2}"
 EXPAND_PARALLEL="${PI_PULSE_EXPAND_PARALLEL:-4}"
+# Directory of the brave-search skill. The scout and expand prompts call
+# `{baseDir}/search.js` and `{baseDir}/content.js`; we substitute {baseDir}
+# with this path so the model never has to discover it -- left unsubstituted,
+# the model resolves it ad hoc and has been observed running `find /` across
+# the whole filesystem (hours-long hang + macOS permission prompts).
+BRAVE_DIR="${PI_PULSE_BRAVE_DIR:-$HOME/.pi/agent/skills/brave-search}"
 export TRACKED ADJACENT BRIDGE FOLLOWUP
 export SCOUT_MAX_INTERESTS SCOUT_QUERIES_PER_INTEREST EXPAND_PARALLEL
 
@@ -176,6 +185,12 @@ if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","versio
   if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1; then
     log "WARN: Anki did not respond after 30s; Anki signals will be empty"
   fi
+fi
+
+# 0c. Sanity: the brave-search skill must exist where {baseDir} points, or
+# scout/expand silently return no signals. Non-fatal -- just surface it.
+if [[ ! -x "$BRAVE_DIR/search.js" ]]; then
+  log "WARN: brave-search skill not found at $BRAVE_DIR (set PI_PULSE_BRAVE_DIR); scout/expand may return nothing"
 fi
 
 # 1. Collect
@@ -261,6 +276,7 @@ log "scout stage: ${SCOUT_PROVIDER}/${SCOUT_MODEL}${SCOUT_THINKING:+ thinking=$S
 scout_start=$SECONDS
 SCOUT_PROMPT=$(sed -e "s|{{SCOUT_MAX_INTERESTS}}|${SCOUT_MAX_INTERESTS}|g" \
                    -e "s|{{SCOUT_QUERIES_PER_INTEREST}}|${SCOUT_QUERIES_PER_INTEREST}|g" \
+                   -e "s|{baseDir}|${BRAVE_DIR}|g" \
                    prompts/scout_signals.md)
 pi -p "$SCOUT_PROMPT" \
    --provider "$SCOUT_PROVIDER" --model "$SCOUT_MODEL" \
@@ -350,7 +366,7 @@ log "expand stage: ${EXPAND_PROVIDER}/${EXPAND_MODEL}${EXPAND_THINKING:+ thinkin
 expand_start=$SECONDS
 export REPO_ROOT="$PWD"
 export EXPAND_DIR="$PWD/.tmp/expand"
-export SESSION_DIR EXPAND_PROVIDER EXPAND_MODEL EXPAND_THINKING
+export SESSION_DIR EXPAND_PROVIDER EXPAND_MODEL EXPAND_THINKING BRAVE_DIR
 awk '{print $1}' "$MANIFEST_FILE" \
   | xargs -n1 -P "$EXPAND_PARALLEL" "$PWD/sources/expand_slot.sh"
 log "expand finished in $((SECONDS - expand_start))s"
