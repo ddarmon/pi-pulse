@@ -201,57 +201,32 @@ uv run sources/build_recent_pulses.py --days "$HISTORY_DAYS" \
 # contribute nothing. This run's own feedback file does not exist yet
 # (it is written at deliver), so today's edits are picked up tomorrow.
 # Non-fatal: feedback bookkeeping must never sink a brief.
+#
+# Run INLINE here rather than via scripts/ingest-feedback.sh. Under launchd,
+# uv aborts "Current directory does not exist" only when invoked from that
+# child script -- a uv-specific quirk of the grandchild-of-launchd process
+# lineage (getcwd works fine for /bin/pwd, python3 and perl in the same
+# process; the cwd is healthy). The identical uv calls work when run
+# directly from pulse.sh, as the collect calls above already prove. The
+# child script stays for manual/interactive use, where it works.
 log "sweeping card feedback"
-# TEMPORARY cwd diagnostic (remove once orphaning is root-caused): record
-# pulse.sh's own cwd liveness right before spawning the ingest child, then
-# let the child append its own probes to the same file. `stat .` reads the
-# cwd inode even when getcwd() fails, so a MISMATCH/ERR pinpoints when the
-# directory we are anchored to gets unlinked/replaced. See cwd_probe in
-# scripts/ingest-feedback.sh.
-export PI_PULSE_PROBE_LOG="$LOG_DIR/cwd-probe.log"
-export PI_PULSE_DIAG_LOG="$LOG_DIR/uv-diag.log"
-printf '[probe %-9s] %s pid=%s pwd_env=%s getcwd=%s cwd_ino=%s exp_ino=%s\n' \
-  pulse-pre "$(date '+%H:%M:%S')" "$$" "${PWD:-<unset>}" \
-  "$(/bin/pwd -P 2>&1)" "$(/usr/bin/stat -f '%i' . 2>&1)" \
-  "$(/usr/bin/stat -f '%i' "$PWD" 2>&1)" >>"$PI_PULSE_PROBE_LOG" 2>&1 || true
-# TEMPORARY uv diagnostic: ingest's uv aborts "Current directory does not
-# exist" under launchd, but pulse.sh's OWN collect uv calls succeed in the
-# same run with a provably healthy cwd. Run the same uv probe here, DIRECTLY
-# from pulse.sh, with verbose + backtrace -- side by side with the child's
-# probe (below) this isolates whether the child-script call site is the
-# differentiator and captures uv's actual error. Non-fatal.
-{ echo "===== pulse-direct $(date '+%H:%M:%S') interp=${BASH:-?} ${BASH_VERSION:-?} pid=$$ ====="
-  # Same getcwd discriminators as the ingest child, in the context where uv
-  # works -- positive control for the side-by-side comparison.
-  echo "GETCWD /bin/pwd:   $(/bin/pwd -P 2>&1)"
-  echo "GETCWD python3:    $(/usr/bin/python3 -c 'import os;print(os.getcwd())' 2>&1)"
-  echo "GETCWD perl:       $(/usr/bin/perl -MCwd -e 'print Cwd::getcwd()' 2>&1)"
-  echo "uv: $(command -v uv)"
-  RUST_BACKTRACE=full uv -v run python -c 'import os;print("PULSE_DIRECT_CWD",os.getcwd())' 2>&1
-  echo "[pulse-direct uv exit=$?]"; } >>"$PI_PULSE_DIAG_LOG" 2>&1 || true
-if scripts/ingest-feedback.sh --all >"$LOG_DIR/ingest-feedback.log" 2>&1; then
-  :
-else
-  # WORKAROUND (pending root-cause): uv fails from the ingest child script
-  # under launchd but works when called directly from pulse.sh (like the
-  # collect calls). Re-run the --all sweep inline here, in pulse.sh's own
-  # context, so feedback is ingested regardless. Mirrors the child's logic.
-  log "WARN: ingest child script failed; running inline fallback (see $LOG_DIR/ingest-feedback.log)"
-  { echo "----- inline fallback $(date '+%H:%M:%S') -----"
-    shopt -s nullglob; fbfiles=(out/*.feedback.md); shopt -u nullglob
-    for f in "${fbfiles[@]}"; do
-      rid="$(basename "$f" .feedback.md)"
-      if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
-        dfb="$PI_PULSE_DELIVERY/${rid}.feedback.md"
-        [[ -f "$dfb" && ( ! -f "$f" || "$dfb" -nt "$f" ) ]] && cp "$dfb" "$f"
-      fi
-    done
-    (( ${#fbfiles[@]} )) && uv run sources/ingest_feedback.py --all
+{
+  # Pull back any edits made to the delivered copy when it is newer.
+  shopt -s nullglob; fbfiles=(out/*.feedback.md); shopt -u nullglob
+  for f in "${fbfiles[@]}"; do
+    rid="$(basename "$f" .feedback.md)"
+    if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
+      dfb="$PI_PULSE_DELIVERY/${rid}.feedback.md"
+      [[ -f "$dfb" && ( ! -f "$f" || "$dfb" -nt "$f" ) ]] && cp "$dfb" "$f"
+    fi
+  done
+  if (( ${#fbfiles[@]} )); then
+    uv run sources/ingest_feedback.py --all && uv run sources/build_feedback_digest.py
+  else
     uv run sources/build_feedback_digest.py
-  } >>"$LOG_DIR/ingest-feedback.log" 2>&1 \
-    && log "inline ingest fallback succeeded" \
-    || log "WARN: inline ingest fallback ALSO failed; see $LOG_DIR/ingest-feedback.log"
-fi
+  fi
+} >"$LOG_DIR/ingest-feedback.log" 2>&1 \
+  || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
 
 # 2. Distill (no tools)
 log "distill stage: ${DISTILL_PROVIDER}/${DISTILL_MODEL}${DISTILL_THINKING:+ thinking=$DISTILL_THINKING}"

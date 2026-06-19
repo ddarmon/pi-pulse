@@ -7,49 +7,25 @@
 #   scripts/ingest-feedback.sh --all     # explicit: all feedback files
 #   scripts/ingest-feedback.sh RUN_ID    # just one run
 #
-# Sweeping all files every run is safe: ingest is idempotent (a run's
-# rows are replaced, not duplicated) and unedited files contribute zero
-# rows. pulse.sh calls `--all` each run so you never have to run this by
-# hand -- edit marks whenever, and the next pulse picks them up.
+# Ingest is idempotent (a run's rows are replaced, not duplicated) and
+# unedited files contribute zero rows, so sweeping all files is safe.
 #
-# If PI_PULSE_DELIVERY is set and its copy of a feedback file is newer
-# than the one in out/ (i.e. you edited the delivered copy), the
-# delivered copy is synced back to out/ before ingest.
+# NOTE: pulse.sh does NOT call this script -- it ingests inline. Under
+# launchd, uv aborts "Current directory does not exist" when invoked from
+# this child script (a uv-specific quirk of the grandchild-of-launchd
+# process lineage; getcwd works fine for every other tool and the cwd is
+# healthy), but works when called directly from pulse.sh. This script
+# remains for MANUAL/interactive use, where it works fine, to pick up edits
+# immediately instead of waiting for the next run.
+#
+# If PI_PULSE_DELIVERY is set and its copy of a feedback file is newer than
+# the one in out/ (i.e. you edited the delivered copy), the delivered copy
+# is synced back to out/ before ingest.
 #
 # This makes zero model calls -- it is pure local bookkeeping.
 
 set -euo pipefail
-
-# --- TEMPORARY cwd diagnostic (remove once the orphaning is root-caused) ---
-# `uv` aborts with "Current directory does not exist" when getcwd() fails,
-# i.e. the directory this process is anchored to has been unlinked/replaced
-# mid-run. `stat .` still reports the cwd's inode even when getcwd() fails,
-# so comparing it to the live inode at the expected path reveals an
-# orphaning (MISMATCH) or deletion (getcwd ERR) the instant it happens.
-# Logs to $PI_PULSE_PROBE_LOG (set by pulse.sh) or stderr when run by hand.
-cwd_probe() {  # $1=label  $2=expected-path (default: $PWD)
-  local label="$1" exp="${2:-${PWD:-/}}" getcwd cwd_ino exp_ino match
-  getcwd="$(/bin/pwd -P 2>&1)" || getcwd="ERR:${getcwd}"
-  cwd_ino="$(/usr/bin/stat -f '%i' . 2>&1)" || cwd_ino="ERR"
-  exp_ino="$(/usr/bin/stat -f '%i' "$exp" 2>&1)" || exp_ino="ERR"
-  match=$([[ "$cwd_ino" == "$exp_ino" ]] && echo match || echo MISMATCH)
-  printf '[probe %-9s] %s pid=%s ppid=%s pwd_env=%s getcwd=%s cwd_ino=%s exp_ino=%s %s\n' \
-    "$label" "$(date '+%H:%M:%S')" "$$" "$PPID" "${PWD:-<unset>}" \
-    "$getcwd" "$cwd_ino" "$exp_ino" "$match" \
-    >>"${PI_PULSE_PROBE_LOG:-/dev/stderr}"
-}
-# State of the cwd inherited from pulse.sh, before we cd anywhere:
-cwd_probe inherited
-# --- end TEMPORARY cwd diagnostic ---
-
-# Resolve the repo root to an absolute, canonical path. ROOT is used by the
-# cwd_probe comparisons and to normalize the cwd; the earlier
-# `uv --directory "$ROOT"` "fix" was REVERTED -- it did not work (the 06-17/
-# 06-18 probes proved the cwd is healthy when uv fails), so uv is called
-# plainly here, matching pulse.sh's collect calls that DO succeed.
-ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-cd "$ROOT"
-cwd_probe after-cd "$ROOT"  # TEMPORARY: state right after we cd to ROOT
+cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
   set -a
@@ -80,7 +56,6 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
   if [[ ${#files[@]} -eq 0 ]]; then
     # Nothing edited yet -- still refresh the digest so its window stays
     # current as old ratings roll off, then exit cleanly.
-    cwd_probe pre-uv "$ROOT"  # TEMPORARY
     uv run sources/build_feedback_digest.py
     echo "[ingest] no feedback files; digest refreshed."
     exit 0
@@ -91,23 +66,6 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
   for f in "${files[@]}"; do
     sync_from_delivery "$(basename "$f" .feedback.md)"
   done
-  cwd_probe pre-uv "$ROOT"  # TEMPORARY: state right before the failing uv
-  # TEMPORARY verbose capture: reproduce the failing uv from THIS child-script
-  # context with -v + backtrace and a full env dump, side by side with the
-  # pulse-direct probe pulse.sh wrote, to finally see uv's actual error.
-  { echo "===== ingest-child $(date '+%H:%M:%S') interp=${BASH:-?} ${BASH_VERSION:-?} pid=$$ ppid=$PPID ====="
-    # getcwd discriminator: run getcwd from several non-uv children of THIS
-    # child bash. If these succeed but uv fails, it is uv-specific; if they
-    # also fail, the child bash's cwd is broken for libc getcwd (not the
-    # __getcwd syscall /bin/pwd uses).
-    echo "GETCWD /bin/pwd:   $(/bin/pwd -P 2>&1)"
-    echo "GETCWD python3:    $(/usr/bin/python3 -c 'import os;print(os.getcwd())' 2>&1)"
-    echo "GETCWD perl:       $(/usr/bin/perl -MCwd -e 'print Cwd::getcwd()' 2>&1)"
-    echo "uv: $(command -v uv)"
-    RUST_BACKTRACE=full uv -v run python -c 'import os;print("CHILD_CWD",os.getcwd())' 2>&1
-    echo "[ingest-child uv exit=$?]"
-    echo "----- env -----"; env | sort
-  } >>"${PI_PULSE_DIAG_LOG:-/dev/stderr}" 2>&1 || true
   uv run sources/ingest_feedback.py --all
 else
   sync_from_delivery "$MODE"
@@ -115,11 +73,9 @@ else
     echo "ERROR: out/${MODE}.feedback.md not found." >&2
     exit 1
   fi
-  cwd_probe pre-uv "$ROOT"  # TEMPORARY
   uv run sources/ingest_feedback.py "$MODE"
 fi
 
-cwd_probe pre-digest "$ROOT"  # TEMPORARY
 uv run sources/build_feedback_digest.py
 echo "[ingest] ledger: memory/feedback.jsonl"
 echo "[ingest] digest: .tmp/feedback_recent.md"
