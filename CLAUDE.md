@@ -104,15 +104,42 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
     provider changes, reintroduce a hard call budget in `pulse.sh`.
 -   **Per-stage model selection.** Each stage (distill, scout, plan,
     expand) takes independent `PI_PULSE_<STAGE>_{MODEL,PROVIDER,THINKING}`
-    overrides, each falling back to the global `PI_MODEL`/`PI_PROVIDER`
-    (default `ollama`/`kimi-k2.6:cloud`). This exists because kimi
-    saturates its output on the harder synthesis prompts (distill, plan)
-    -- it emits a `thinking` block and no answer text, so the stage writes
-    0 bytes and the run aborts. The local `.env` therefore points
-    distill+plan at `minimax-m3:cloud` (survives synthesis, works through
-    pi as-is) while scout+expand stay on kimi (proven and faster on the
-    tool loops). `*_THINKING` is wired but inert for kimi via Ollama (pi
-    cannot send a working "off" over the OpenAI-compat endpoint).
+    overrides, each falling back to the global `PI_MODEL`/`PI_PROVIDER`.
+    As of ~2026-06-18 the local `.env` runs **all four stages on
+    `glm-5.2:cloud`** (top open-weight model as of June 2026). (Earlier the
+    pipeline split distill+plan onto `minimax-m3:cloud` and scout+expand on
+    `kimi-k2.6:cloud` because kimi saturated the harder synthesis prompts;
+    both entries remain in `models.json` as alternatives.)
+-   **glm-5.2 thinking-runaway and the scout fix.** glm-5.2 is a reasoning
+    model and on a heavy synthesis turn it *intermittently* (~20%, measured
+    2026-06-27/28) ends inside its `thinking` channel and emits **no answer
+    text** -- `stopReason=stop`, `usage.output=0` -- so the stage writes
+    0 bytes and the run aborts. It is stochastic: a fresh sample almost
+    always succeeds. Two mitigations are in place:
+    1.  **Scout runs with thinking OFF** (`PI_PULSE_SCOUT_THINKING=off`),
+        which makes it **stall-proof by construction** (no reasoning channel
+        to run away in) and, in a live test (2026-06-28), also *faster* with
+        an equal-or-fuller signal sheet. This REQUIRES a `thinkingLevelMap`
+        on the `glm-5.2:cloud` entry in `~/.pi/agent/models.json`:
+        `{"off":"none","low":"low","medium":"medium","high":"high","xhigh":"max"}`.
+        Without it, pi's bare `--thinking off` **omits** the field over the
+        OpenAI-compat endpoint and the model still thinks (it does NOT
+        disable). With it, pi sends `reasoning_effort=none`.
+    2.  **distill/plan keep thinking on** (ranking/synthesis benefit from it)
+        but are wrapped by `run_pi_retry` in `pulse.sh`, which resamples on
+        0-byte output up to `PI_PULSE_SYNTH_RETRIES` (default 3). scout is
+        wrapped too as belt-and-suspenders.
+-   **pi -> Ollama thinking plumbing (gotchas).** pi has no native Ollama
+    provider; `ollama` in `models.json` is a user-defined OpenAI-compat
+    provider, so pi sends the thinking level as `reasoning_effort` over
+    `/v1/chat/completions` (NOT Ollama's native `/api/chat` `think`). Ollama
+    maps `reasoning_effort` -> internal `Think`; valid values are
+    **`high|medium|low|max|none`** (`none` => thinking off). pi's own labels
+    are `off|minimal|low|medium|high|xhigh`; by default `off` is omitted (not
+    sent as `none`), `xhigh` clamps to `high` (never reaches `max`), and
+    **`minimal` is sent verbatim and 400s the request** -- so a `thinkingLevelMap`
+    is the only way to reach `none`/`max`, and **`*_THINKING=minimal` must
+    never be set** (the 400 -> 0 bytes -> aborts the run).
 -   **Card quotas are caps, not targets** (except the bridge
     minimum). Plan emits fewer cards when scout returns fewer grounded
     signals. A short, fully grounded brief is the goal -- never
@@ -228,8 +255,12 @@ There is no cron yet -- run it weekly when convenient.
 -   `.tmp/expand/NN/{slot.md,body.md,err.log}` -- per-slot plan
     fragment, card body, and stderr (including any `DROPPED` line).
 -   `pulse.sh` exits 1 if distill, scout, or plan produces 0-byte
-    output, if the ledger filter drops every scout signal, or if
-    every expand slot drops. Logs are preserved.
+    output *after `PI_PULSE_SYNTH_RETRIES` attempts* (default 3; each
+    stage is wrapped by `run_pi_retry`, which resamples on empty output
+    -- see the glm-5.2 thinking-runaway note above), if the ledger
+    filter drops every scout signal, or if every expand slot drops.
+    Logs are preserved. A retried stage logs
+    `<stage>: EMPTY output on attempt N/M ...` / `recovered on attempt N`.
 
 ## Known constraints
 

@@ -109,6 +109,12 @@ distill_think=(); [[ -n "$DISTILL_THINKING" ]] && distill_think=(--thinking "$DI
 scout_think=();   [[ -n "$SCOUT_THINKING"   ]] && scout_think=(--thinking "$SCOUT_THINKING")
 plan_think=();    [[ -n "$PLAN_THINKING"    ]] && plan_think=(--thinking "$PLAN_THINKING")
 
+# Total attempts for each single-shot synthesis stage (distill/scout/plan).
+# glm-5.2 occasionally ends a synthesis turn inside its reasoning channel and
+# emits no answer text, leaving a 0-byte file; a fresh sample almost always
+# succeeds. See run_pi_retry below.
+SYNTH_RETRIES="${PI_PULSE_SYNTH_RETRIES:-3}"
+
 NOTES_SINCE="${PI_PULSE_NOTES_SINCE:-30}"
 SESH_SINCE="${PI_PULSE_SESH_SINCE:-7}"
 HISTORY_DAYS="${PI_PULSE_HISTORY_DAYS:-7}"
@@ -136,6 +142,30 @@ if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
 fi
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+
+# Run a single-shot pi synthesis stage, retrying if it yields EMPTY output.
+# Guards the glm-5.2 "thinking runaway": the model can end its turn inside the
+# reasoning channel and emit no answer text, leaving a 0-byte file. A fresh
+# sample almost always succeeds; cost is one extra pi call (fine under the
+# unlimited Ollama subscription). Errexit is suspended for the body because
+# callers invoke this as `if ! run_pi_retry ...`, so a nonzero pi exit just
+# triggers another attempt. Output is judged by file size, not pi's exit code.
+#   run_pi_retry <outfile> <errfile> <label> -- pi <args...>
+run_pi_retry() {
+  local out=$1 err=$2 label=$3; shift 3
+  [[ "$1" == "--" ]] && shift
+  local n=1
+  while (( n <= SYNTH_RETRIES )); do
+    "$@" > "$out" 2>"$err"
+    if [[ -s "$out" ]]; then
+      (( n > 1 )) && log "  ${label}: recovered on attempt ${n}/${SYNTH_RETRIES}"
+      return 0
+    fi
+    log "  ${label}: EMPTY output on attempt ${n}/${SYNTH_RETRIES} (glm-5.2 thinking runaway); resampling"
+    (( n++ ))
+  done
+  return 1
+}
 
 # Lockfile: .tmp/ is shared scratch and would corrupt under concurrent
 # runs. mkdir is atomic; if it fails, surface the holder's PID/RUN_ID
@@ -246,24 +276,22 @@ log "sweeping card feedback"
 # 2. Distill (no tools)
 log "distill stage: ${DISTILL_PROVIDER}/${DISTILL_MODEL}${DISTILL_THINKING:+ thinking=$DISTILL_THINKING}"
 distill_start=$SECONDS
-pi -p "$(cat prompts/distill_context.md)" \
-   --provider "$DISTILL_PROVIDER" --model "$DISTILL_MODEL" \
-   ${distill_think[@]+"${distill_think[@]}"} \
-   --no-skills \
-   --session-dir "$SESSION_DIR/distill" \
-   @.tmp/chats_recent.md @.tmp/sesh_recent.md \
-   @.tmp/anki_signals.md @memory/interests.md \
-   > .tmp/interests_today.md \
-   2>"$LOG_DIR/distill.err"
+if ! run_pi_retry .tmp/interests_today.md "$LOG_DIR/distill.err" distill -- \
+   pi -p "$(cat prompts/distill_context.md)" \
+      --provider "$DISTILL_PROVIDER" --model "$DISTILL_MODEL" \
+      ${distill_think[@]+"${distill_think[@]}"} \
+      --no-skills \
+      --session-dir "$SESSION_DIR/distill" \
+      @.tmp/chats_recent.md @.tmp/sesh_recent.md \
+      @.tmp/anki_signals.md @memory/interests.md ; then
+  log "ERROR: distill stage produced empty output after $SYNTH_RETRIES attempts. See $LOG_DIR/distill.err"
+  exit 1
+fi
 log "distill finished in $((SECONDS - distill_start))s"
 distill_session=$(newest_session "$SESSION_DIR/distill")
 if [[ -n "$distill_session" ]]; then
   uv run sources/inspect_session.py "$distill_session" --label "distill" \
     > "$LOG_DIR/distill.log.md"
-fi
-if [[ ! -s .tmp/interests_today.md ]]; then
-  log "ERROR: distill stage produced empty output. See $LOG_DIR/distill.err"
-  exit 1
 fi
 
 # 2b. Archive this run's memo so the weekly profile-suggest stage has a
@@ -278,23 +306,21 @@ SCOUT_PROMPT=$(sed -e "s|{{SCOUT_MAX_INTERESTS}}|${SCOUT_MAX_INTERESTS}|g" \
                    -e "s|{{SCOUT_QUERIES_PER_INTEREST}}|${SCOUT_QUERIES_PER_INTEREST}|g" \
                    -e "s|{baseDir}|${BRAVE_DIR}|g" \
                    prompts/scout_signals.md)
-pi -p "$SCOUT_PROMPT" \
-   --provider "$SCOUT_PROVIDER" --model "$SCOUT_MODEL" \
-   ${scout_think[@]+"${scout_think[@]}"} \
-   --session-dir "$SESSION_DIR/scout" \
-   @.tmp/interests_today.md @memory/interests.md \
-   @memory/seen_urls.jsonl @.tmp/recent_pulses.md \
-   > .tmp/signals_raw.md \
-   2>"$LOG_DIR/scout.err"
+if ! run_pi_retry .tmp/signals_raw.md "$LOG_DIR/scout.err" scout -- \
+   pi -p "$SCOUT_PROMPT" \
+      --provider "$SCOUT_PROVIDER" --model "$SCOUT_MODEL" \
+      ${scout_think[@]+"${scout_think[@]}"} \
+      --session-dir "$SESSION_DIR/scout" \
+      @.tmp/interests_today.md @memory/interests.md \
+      @memory/seen_urls.jsonl @.tmp/recent_pulses.md ; then
+  log "ERROR: scout stage produced empty signals after $SYNTH_RETRIES attempts. See $LOG_DIR/scout.err"
+  exit 1
+fi
 log "scout finished in $((SECONDS - scout_start))s"
 scout_session=$(newest_session "$SESSION_DIR/scout")
 if [[ -n "$scout_session" ]]; then
   uv run sources/inspect_session.py "$scout_session" --label "scout" \
     > "$LOG_DIR/scout.log.md"
-fi
-if [[ ! -s .tmp/signals_raw.md ]]; then
-  log "ERROR: scout stage produced empty signals. See $LOG_DIR/scout.err"
-  exit 1
 fi
 
 # 3b. Deterministic ledger filter: drop signals whose normalized URL is
@@ -325,24 +351,22 @@ PLAN_PROMPT=$(sed -e "s|{{TRACKED}}|${TRACKED}|g" \
                   -e "s|{{BRIDGE}}|${BRIDGE}|g" \
                   -e "s|{{FOLLOWUP}}|${FOLLOWUP}|g" \
                   prompts/compose_plan.md)
-pi -p "$PLAN_PROMPT" \
-   --provider "$PLAN_PROVIDER" --model "$PLAN_MODEL" \
-   ${plan_think[@]+"${plan_think[@]}"} \
-   --no-skills \
-   --session-dir "$SESSION_DIR/plan" \
-   @.tmp/signals.md @.tmp/interests_today.md \
-   @.tmp/recent_pulses.md @memory/seen_urls.jsonl \
-   > .tmp/plan.md \
-   2>"$LOG_DIR/plan.err"
+if ! run_pi_retry .tmp/plan.md "$LOG_DIR/plan.err" plan -- \
+   pi -p "$PLAN_PROMPT" \
+      --provider "$PLAN_PROVIDER" --model "$PLAN_MODEL" \
+      ${plan_think[@]+"${plan_think[@]}"} \
+      --no-skills \
+      --session-dir "$SESSION_DIR/plan" \
+      @.tmp/signals.md @.tmp/interests_today.md \
+      @.tmp/recent_pulses.md @memory/seen_urls.jsonl ; then
+  log "ERROR: plan stage produced empty output after $SYNTH_RETRIES attempts. See $LOG_DIR/plan.err"
+  exit 1
+fi
 log "plan finished in $((SECONDS - plan_start))s"
 plan_session=$(newest_session "$SESSION_DIR/plan")
 if [[ -n "$plan_session" ]]; then
   uv run sources/inspect_session.py "$plan_session" --label "plan" \
     > "$LOG_DIR/plan.log.md"
-fi
-if [[ ! -s .tmp/plan.md ]]; then
-  log "ERROR: plan stage produced empty output. See $LOG_DIR/plan.err"
-  exit 1
 fi
 
 # 5. Expand (per-card parallel; web search/fetch enabled).
