@@ -14,6 +14,7 @@ from __future__ import annotations
 import http.client
 import json
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -305,6 +306,24 @@ class TestHTTP(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req, timeout=5)
         self.assertEqual(cm.exception.code, 413)
+
+    def test_negative_content_length_400(self):
+        # urllib/http.client always compute Content-Length, so speak raw
+        # HTTP. A negative length must be rejected BEFORE the body read:
+        # rfile.read(-1) reads until EOF, i.e. unbounded memory and a
+        # worker thread blocked until the client hangs up. We send no
+        # body and no EOF -- a vulnerable server blocks and this recv
+        # times out instead of returning 400.
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as sock:
+            sock.sendall(
+                b"POST /api/rate HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: -1\r\n"
+                b"\r\n"
+            )
+            status_line = sock.recv(4096).split(b"\r\n", 1)[0]
+        self.assertIn(b" 400 ", status_line)
 
     def test_security_headers(self):
         with urllib.request.urlopen(self.url("/"), timeout=5) as resp:

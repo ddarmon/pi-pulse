@@ -449,6 +449,9 @@ class FeedbackHandler(BaseHTTPRequestHandler):
         if ip_allowed(self.client_address[0]):
             return True
         self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
+        # The request body (if any) is never read on this path; keeping the
+        # connection alive would let its bytes corrupt the next request.
+        self.close_connection = True
         return False
 
     # -- routes --
@@ -495,6 +498,13 @@ class FeedbackHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
             self._send_json(400, {"ok": False, "error": "missing/invalid Content-Length"})
+            return
+        if length < 0:
+            # A negative Content-Length would reach rfile.read(-1), which
+            # reads until EOF -- unbounded memory and a worker thread that
+            # blocks until the client closes. Reject before reading.
+            self._send_json(400, {"ok": False, "error": "missing/invalid Content-Length"})
+            self.close_connection = True
             return
         if length > MAX_BODY_BYTES:
             # Refuse without reading the oversized body.
