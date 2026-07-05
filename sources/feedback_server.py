@@ -276,80 +276,127 @@ WIDGET_JS = """
   var h2s = document.querySelectorAll("h2");
   var n = Math.min(h2s.length, state.entries.length);
 
-  function widget(h2, entry) {
-    var bar = document.createElement("div");
-    bar.className = "pulse-rate";
-    var btns = [];
-    function setOn(mark) {
-      btns.forEach(function (p) { p[1].className = p[0] === mark ? "on" : ""; });
+  // One factory per card. Every bar built for the same card registers
+  // itself in a shared `instances` list; `syncMarks`/`syncNote` push the
+  // authoritative `entry` state back onto all of them, so rating (or
+  // taking a note) from the top bar instantly updates the bottom bar and
+  // vice versa. `entry` is the single source of truth: clicks mutate it
+  // optimistically, a successful POST confirms it, a failed POST reverts.
+  function cardFactory(entry) {
+    var instances = [];
+    function syncMarks() {
+      instances.forEach(function (inst) { inst.setOn(entry.mark); });
     }
-    var status = document.createElement("span");
-    status.className = "pulse-status";
-    var timer;
-    function flash(msg, isErr) {
-      status.textContent = msg;
-      status.style.color = isErr ? "#e05252" : "";
-      clearTimeout(timer);
-      if (!isErr) timer = setTimeout(function () { status.textContent = ""; }, 1500);
+    function syncNote() {
+      instances.forEach(function (inst) { inst.renderNote(); });
     }
-    MARKS.forEach(function (mk) {
-      var b = document.createElement("button");
-      b.type = "button";
-      b.textContent = mk[1];
-      if (mk[0] === entry.mark) b.className = "on";
-      b.addEventListener("click", function () {
-        var prev = entry.mark;
-        setOn(mk[0]);
-        post({ run_id: state.run_id, card: entry.num, mark: mk[0] }, function (res) {
-          entry.mark = res.mark;
+
+    function bar() {
+      var barEl = document.createElement("div");
+      barEl.className = "pulse-rate";
+      var btns = [];
+      function setOn(mark) {
+        btns.forEach(function (p) { p[1].className = p[0] === mark ? "on" : ""; });
+      }
+      var status = document.createElement("span");
+      status.className = "pulse-status";
+      var timer;
+      function flash(msg, isErr) {
+        status.textContent = msg;
+        status.style.color = isErr ? "#e05252" : "";
+        clearTimeout(timer);
+        if (!isErr) timer = setTimeout(function () { status.textContent = ""; }, 1500);
+      }
+      MARKS.forEach(function (mk) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = mk[1];
+        b.addEventListener("click", function () {
+          var prev = entry.mark;
+          entry.mark = mk[0];
+          syncMarks();
+          post({ run_id: state.run_id, card: entry.num, mark: mk[0] }, function (res) {
+            entry.mark = res.mark;
+            syncMarks();
+            flash("saved");
+          }, function (e) {
+            entry.mark = prev;
+            syncMarks();
+            flash("error: " + e.message, true);
+          });
+        });
+        btns.push([mk[0], b]);
+        barEl.appendChild(b);
+      });
+
+      var noteRow = document.createElement("div");
+      noteRow.className = "pulse-note";
+      noteRow.hidden = true;
+      var input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 500;
+      input.placeholder = "note";
+      var save = document.createElement("button");
+      save.type = "button";
+      save.textContent = "save";
+      save.addEventListener("click", function () {
+        post({ run_id: state.run_id, card: entry.num, mark: entry.mark, note: input.value }, function (res) {
+          entry.note = res.note;
+          syncNote();
           flash("saved");
         }, function (e) {
-          setOn(prev);
           flash("error: " + e.message, true);
         });
       });
-      btns.push([mk[0], b]);
-      bar.appendChild(b);
-    });
+      noteRow.appendChild(input);
+      noteRow.appendChild(save);
 
-    var noteRow = document.createElement("div");
-    noteRow.className = "pulse-note";
-    noteRow.hidden = true;
-    var input = document.createElement("input");
-    input.type = "text";
-    input.maxLength = 500;
-    input.placeholder = "note";
-    input.value = entry.note || "";
-    var save = document.createElement("button");
-    save.type = "button";
-    save.textContent = "save";
-    save.addEventListener("click", function () {
-      post({ run_id: state.run_id, card: entry.num, mark: entry.mark, note: input.value }, function (res) {
-        entry.note = res.note;
-        toggle.textContent = entry.note ? "note \\u2022" : "note";
-        flash("saved");
-      }, function (e) {
-        flash("error: " + e.message, true);
+      var toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.addEventListener("click", function () {
+        noteRow.hidden = !noteRow.hidden;
+        if (!noteRow.hidden) input.focus();
       });
-    });
-    noteRow.appendChild(input);
-    noteRow.appendChild(save);
+      function renderNote() {
+        toggle.textContent = entry.note ? "note \\u2022" : "note";
+        // Don't clobber what the reader is actively typing in this input.
+        if (document.activeElement !== input) input.value = entry.note || "";
+      }
+      barEl.appendChild(toggle);
+      barEl.appendChild(status);
 
-    var toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.textContent = entry.note ? "note \\u2022" : "note";
-    toggle.addEventListener("click", function () {
-      noteRow.hidden = !noteRow.hidden;
-      if (!noteRow.hidden) input.focus();
-    });
-    bar.appendChild(toggle);
-    bar.appendChild(status);
+      instances.push({ setOn: setOn, renderNote: renderNote });
+      setOn(entry.mark);
+      renderNote();
+      return { bar: barEl, noteRow: noteRow };
+    }
 
-    h2.insertAdjacentElement("afterend", noteRow);
-    h2.insertAdjacentElement("afterend", bar);
+    return bar;
   }
 
-  for (var i = 0; i < n; i++) widget(h2s[i], state.entries[i]);
+  for (var i = 0; i < n; i++) {
+    var h2 = h2s[i];
+    var makeBar = cardFactory(state.entries[i]);
+    // Top bar: immediately after the heading.
+    var topW = makeBar();
+    h2.insertAdjacentElement("afterend", topW.noteRow);
+    h2.insertAdjacentElement("afterend", topW.bar);
+    // Bottom bar: at the end of this card's content, i.e. just before
+    // the next card's <h2>. The last card has no following <h2>, so its
+    // content ends at the close of the h2's parent container (the
+    // <main> render_html.py emits, in both the pandoc and markdown-
+    // fallback shapes) -- append there, ahead of nothing.
+    var botW = makeBar();
+    var nextH2 = h2s[i + 1];
+    if (nextH2) {
+      nextH2.insertAdjacentElement("beforebegin", botW.bar);
+      nextH2.insertAdjacentElement("beforebegin", botW.noteRow);
+    } else {
+      var parent = h2.parentNode;
+      parent.appendChild(botW.bar);
+      parent.appendChild(botW.noteRow);
+    }
+  }
 
   var top = document.createElement("div");
   top.id = "pulse-topbar";
