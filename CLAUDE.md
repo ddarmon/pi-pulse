@@ -40,7 +40,13 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     copied verbatim from `.tmp/signals.md` -- plan never invents URLs
     or topics. `PI_PULSE_CARDS_{TRACKED,ADJACENT,BRIDGE,FOLLOWUP}` are
     CAPS, not targets: on slow signal days the brief shrinks rather
-    than padding. Default caps 5/2/1/1.
+    than padding. Default caps 5/2/1/1. The reader-feedback digest
+    (`.tmp/feedback_recent.md`) is attached as a ranking prior:
+    valued topics break ties, not-valued topics are down-ranked,
+    avoid-candidates need a fresh dated signal -- always within the
+    quotas, never to pad. A per-thread diversity cap (at most 2 cards
+    per `memo_anchor`/thread) binds before feedback steering so
+    "more like this" cannot concentrate the brief onto one thread.
 5.  **expand** -- `sources/split_plan.py` writes one
     `.tmp/expand/NN/slot.md` per planned card, verifying each slot's
     `Source URL:` against `.tmp/signals.md` (normalized comparison);
@@ -193,9 +199,15 @@ reviewed and is skipped. The whole path makes
 **zero model calls**. Note a run cannot ingest its *own* feedback file
 (written at deliver, all-unrated at that point) -- today's edits are
 swept up by tomorrow's run.
-The digest is consumed by the profile-suggest stage (below). Unrated
+The digest is consumed daily by the plan stage (attached to the
+compose_plan pi call as a ranking prior, with a `## Tendencies`
+per-tag summary up top; pulse.sh logs a one-line census of it before
+plan and guarantees a stub exists so the attachment never dangles) and
+weekly by the profile-suggest stage (below). Unrated
 (`[ ]`) cards are skipped; `[--]` does not auto-suppress a topic (the URL
-is already in `seen_urls.jsonl`), it only flags an avoid-candidate.
+is already in `seen_urls.jsonl`), it only flags an avoid-candidate --
+plan may still cover such a topic when today's memo names a fresh,
+dated signal, and must say so in the slot's rationale.
 
 A third rating path is the **feedback web server**
 (`scripts/feedback-server.sh` -> `sources/feedback_server.py`, stdlib

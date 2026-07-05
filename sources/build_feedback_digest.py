@@ -3,9 +3,12 @@
 
 Reads `memory/feedback.jsonl`, keeps rows within the last N days
 (default 14), and writes a grouped markdown digest to
-`.tmp/feedback_recent.md`. This is the bridge into the weekly
-profile-suggest stage: it summarizes what landed, what didn't, and
-which topics the user explicitly does not want.
+`.tmp/feedback_recent.md`. The digest feeds both the daily plan stage
+(attached to the compose_plan pi call) and the weekly profile-suggest
+stage: it summarizes what landed, what didn't, and which topics the
+user explicitly does not want. A `## Tendencies` section up top gives
+per-tag counts and mean ratings so a ranker can read the drift at a
+glance.
 
 Always writes a file (a "(no feedback in window)" stub when empty) so
 downstream consumers can attach it unconditionally.
@@ -56,6 +59,27 @@ def fmt(row: dict) -> str:
     return line
 
 
+TAG_ORDER = ["tracked", "adjacent", "bridge", "follow-up"]
+
+
+def tendencies(rows: list[dict]) -> list[str]:
+    """One `- tag: N rated, mean +X.X` line per tag with rated rows."""
+    by_tag: dict[str, list[int]] = {}
+    for r in rows:
+        tag = r.get("tag", "")
+        if not tag:
+            continue
+        by_tag.setdefault(tag, []).append(r.get("rating", 0))
+    ordered = [t for t in TAG_ORDER if t in by_tag]
+    ordered += sorted(t for t in by_tag if t not in TAG_ORDER)
+    lines = []
+    for tag in ordered:
+        ratings = by_tag[tag]
+        mean = sum(ratings) / len(ratings)
+        lines.append(f"- {tag}: {len(ratings)} rated, mean {mean:+.1f}")
+    return lines
+
+
 def render(rows: list[dict], days: int) -> str:
     valued = sorted([r for r in rows if r.get("rating", 0) > 0], key=lambda r: r.get("rating", 0), reverse=True)
     neutral = [r for r in rows if r.get("rating") == 0]
@@ -67,6 +91,10 @@ def render(rows: list[dict], days: int) -> str:
         out.append("(no feedback in window)")
         out.append("")
         return "\n".join(out)
+
+    out.append("## Tendencies")
+    out.extend(tendencies(rows))
+    out.append("")
 
     def section(heading: str, group: list[dict]) -> None:
         out.append(heading)
