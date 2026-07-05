@@ -27,6 +27,10 @@ Inputs (already attached):
     `YYYY-MM-DD-HHMM` for multi-pulse briefs); copy STEM verbatim
     when emitting a follow-up tag. If the bundle says there are no
     prior pulses in the window, treat that as no constraint.
+-   `.tmp/feedback_recent.md` -- the reader's ratings on recently
+    delivered cards, grouped valued / neutral / not-valued /
+    avoid-candidates, with a per-tag `## Tendencies` summary near the
+    top. Use it per the Reader feedback rules below.
 
 Quotas are CAPS, not targets (this is a change from prior runs):
 
@@ -54,6 +58,14 @@ Quotas are CAPS, not targets (this is a change from prior runs):
     earlier brief from the same calendar day is fair game as the
     prior coverage. If no signal satisfies all three, emit zero
     follow-ups.
+-   **Per-thread diversity cap: at most 2 cards** in one brief may
+    share the same `memo_anchor` or clearly serve the same single
+    active project or thread (e.g. the same working paper, the same
+    memo bullet). When more than 2 strong signals serve one thread,
+    keep the best 2 and spend the freed slots on distinct memo
+    anchors or durable-profile interests. This cap binds BEFORE the
+    Reader feedback preferences below: valued-topic steering must
+    never concentrate the brief onto one thread.
 
 If the signal sheet does not contain enough qualifying entries to
 fill a cap, **emit fewer cards**. A shorter, fully-grounded brief is
@@ -126,3 +138,31 @@ Rules:
     from recent_pulses.md, not today's.
 -   You have no tools in this stage -- you cannot search the web or
     fetch URLs. Plan from the signal sheet only.
+
+Reader feedback (`.tmp/feedback_recent.md`):
+
+-   **Valued (`++`/`+`):** when two candidate signals are otherwise
+    comparable, prefer the one that resembles valued cards in topic,
+    source class, or tag. A reader `note:` on a rated card is the
+    strongest steering signal of all -- treat it as a direct
+    instruction.
+-   **Not valued (`-`):** down-rank candidates similar to not-valued
+    cards. A down-ranked topic must never beat an unrated alternative
+    for the last slot of a quota.
+-   **Avoid candidates (`--`):** do not emit a card on substantially
+    the same topic unless today's memo names a fresh, dated signal
+    for it; if you do emit one, the slot's rationale must say so
+    explicitly.
+-   **Neutral (`=`):** no effect. If the digest says
+    "(no feedback in window)", this whole section imposes no
+    constraint.
+-   **GUARDRAILS -- feedback adjusts ranking WITHIN the quotas and
+    rules above, never around them.** It never justifies exceeding a
+    cap, padding a thin day, inventing a topic, or emitting a second
+    card on a topic that already has one in today's brief. The
+    per-thread diversity cap binds before any valued-topic
+    preference. Fewer, grounded cards still beats more, padded ones.
+-   **Attribution:** when feedback materially influenced a pick or a
+    skip, append one sentence starting `Feedback:` to that slot's
+    `Why this card:` line (or its `Why this is adjacent:` line).
+    When it didn't, say nothing -- do not add boilerplate.

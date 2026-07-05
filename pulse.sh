@@ -10,7 +10,10 @@
 #      (deterministic; the prompt-level ledger check is advisory only)
 #   4. Plan via Pi headless (no tools): rank scout signals into
 #      TRACKED / ADJACENT / BRIDGE / FOLLOWUP card slots, each with a
-#      committed Source URL drawn verbatim from signals.md
+#      committed Source URL drawn verbatim from signals.md. The reader-
+#      feedback digest (.tmp/feedback_recent.md) is attached as a
+#      ranking prior; a per-thread diversity cap in the prompt keeps
+#      it from concentrating the brief onto one thread.
 #   5. Expand via Pi headless (web search/fetch enabled), one pi call
 #      PER CARD in parallel (capped by PI_PULSE_EXPAND_PARALLEL): fetch
 #      the committed Source URL, write 250-400 words of prose
@@ -273,6 +276,16 @@ log "sweeping card feedback"
 } >"$LOG_DIR/ingest-feedback.log" 2>&1 \
   || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
 
+# The plan stage attaches .tmp/feedback_recent.md unconditionally; a
+# missing file would sink the pi call as a bad @-attachment. The ingest
+# block above is non-fatal (and on a fresh clone has nothing to sweep),
+# so guarantee the file exists with the same stub the digest builder
+# writes for an empty window.
+if [[ ! -f .tmp/feedback_recent.md ]]; then
+  printf '# Recent feedback (last 14 days)\n\n(no feedback in window)\n' \
+    > .tmp/feedback_recent.md
+fi
+
 # 2. Distill (no tools)
 log "distill stage: ${DISTILL_PROVIDER}/${DISTILL_MODEL}${DISTILL_THINKING:+ thinking=$DISTILL_THINKING}"
 distill_start=$SECONDS
@@ -344,6 +357,24 @@ signals_kept=$(grep -c '^## Signal ' .tmp/signals.md || true)
 log "signals: ${signals_kept}/${signals_raw} kept after ledger filter"
 
 # 4. Plan (no tools): rank scout signals into card slots with committed URLs.
+# Plan also receives the reader-feedback digest (.tmp/feedback_recent.md,
+# refreshed in step 1c) as a ranking prior. Log a one-line census of it so
+# a run's steering input is visible in the run log and summary.
+if grep -q '^(no feedback in window)$' .tmp/feedback_recent.md; then
+  fb_census="empty"
+else
+  fb_census=$(awk '
+    /^## Valued /           {sec="v"; next}
+    /^## Neutral /          {sec="n"; next}
+    /^## Not valued /       {sec="x"; next}
+    /^## Avoid candidates / {sec="a"; next}
+    /^## /                  {sec="";  next}
+    /^- / { if (sec=="v") v++; else if (sec=="n") n++;
+            else if (sec=="x") x++; else if (sec=="a") a++ }
+    END { printf "%d valued / %d neutral / %d not-valued / %d avoid", v, n, x, a }
+  ' .tmp/feedback_recent.md)
+fi
+log "feedback digest: ${fb_census}"
 log "plan stage: ${PLAN_PROVIDER}/${PLAN_MODEL}${PLAN_THINKING:+ thinking=$PLAN_THINKING} (caps T=${TRACKED} A=${ADJACENT} B=${BRIDGE} F=${FOLLOWUP})"
 plan_start=$SECONDS
 PLAN_PROMPT=$(sed -e "s|{{TRACKED}}|${TRACKED}|g" \
@@ -358,7 +389,8 @@ if ! run_pi_retry .tmp/plan.md "$LOG_DIR/plan.err" plan -- \
       --no-skills \
       --session-dir "$SESSION_DIR/plan" \
       @.tmp/signals.md @.tmp/interests_today.md \
-      @.tmp/recent_pulses.md @memory/seen_urls.jsonl ; then
+      @.tmp/recent_pulses.md @.tmp/feedback_recent.md \
+      @memory/seen_urls.jsonl ; then
   log "ERROR: plan stage produced empty output after $SYNTH_RETRIES attempts. See $LOG_DIR/plan.err"
   exit 1
 fi
@@ -475,6 +507,7 @@ log "expand drops: ${dropped_count}/${SLOT_COUNT} (split-stage drops: ${split_dr
   echo "- card caps: tracked=${TRACKED} adjacent=${ADJACENT} bridge=${BRIDGE} followup=${FOLLOWUP}"
   echo "- scout caps: interests=${SCOUT_MAX_INTERESTS} queries=${SCOUT_QUERIES_PER_INTEREST}"
   echo "- signals: raw=${signals_raw} kept=${signals_kept} (ledger filter)"
+  echo "- feedback digest: ${fb_census}"
   echo "- expand: slots=${SLOT_COUNT} parallel=${EXPAND_PARALLEL} drops=${dropped_count}"
   echo
   [[ -f "$LOG_DIR/distill.log.md" ]] && cat "$LOG_DIR/distill.log.md"

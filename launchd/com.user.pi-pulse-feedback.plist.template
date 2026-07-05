@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pi-pulse feedback-server launchd template. Substitute the paths
+  below for your install, then copy to ~/Library/LaunchAgents/ and
+  load with
+  `launchctl load ~/Library/LaunchAgents/com.user.pi-pulse-feedback.plist`.
+
+  Placeholders:
+    {{REPO}}    Absolute path to the pi-pulse checkout
+                (e.g. /Users/you/code/pi-pulse)
+    {{HOME}}    Your home directory (e.g. /Users/you)
+    {{PATH}}    A PATH that includes python3 and (for --host tailscale
+                autodetection) the `tailscale` CLI if you have it
+                (e.g. /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin)
+
+  Configuration belongs in {{REPO}}/.env, which feedback-server.sh
+  sources before starting the server. launchd does NOT inherit your
+  shell profile (~/.zprofile, ~/.zshrc), so in particular
+  PI_PULSE_FEEDBACK_HOST=tailscale must be set in .env (not exported
+  from your shell) for the scheduled server to bind the tailnet IP.
+
+  Bound to the Tailscale IP, any phone/tablet on your tailnet reaches
+  the server at http://<machine-tailnet-name>:8377/ (via MagicDNS)
+  while nothing on the LAN or wider internet can connect -- and the
+  server additionally refuses non-tailnet/non-loopback client IPs.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.pi-pulse-feedback</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{REPO}}/scripts/feedback-server.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO}}</string>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>{{REPO}}/logs/feedback-server.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{REPO}}/logs/feedback-server.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{PATH}}</string>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -11,8 +11,17 @@ package with sensible extensions. In both cases, the output is wrapped
 in our own HTML template with embedded CSS so the result is one file
 that renders acceptably on iPhone and desktop without further styling.
 
-MathJax is loaded from a CDN only if `$...$` or `$$...$$` is detected
-in the source.
+MathJax is loaded from a CDN only if genuine `$...$` / `$$...$$` math is
+detected in the source (currency dollars alone never trigger it).
+
+Currency-vs-math note: briefs freely mix currency ("Uber's $1,500/month")
+and TeX ("$S_{\\text{token}} \\le X$") in one paragraph. MathJax is
+configured with ONLY `\\(...\\)` / `\\[...\\]` delimiters, never bare
+`$`, so its in-browser text scanner can never pair two currency dollars
+into bogus italic math (the long-standing "200/weekAIspendingcap" bug).
+Pandoc already emits `\\(...\\)` / `\\[...\\]` for real math and leaves
+currency as literal `$` text; the markdown fallback path reproduces that
+via `_protect_math`.
 
 Usage:
     render_html.py <input.md> <output.html>
@@ -28,14 +37,78 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Inline math like $x$ or display math $$ ... $$. The first alternative
-# refuses to match across blank lines and avoids capturing a stray `$`
-# in prose (e.g. a price). The second is greedy across lines.
-MATH_RE = re.compile(r"\$[^\s$][^$\n]{0,400}\$|\$\$[\s\S]+?\$\$")
+# Genuine inline math like `$x$` / `$X \le Y$`. The delimiter rules make
+# currency and math separable in one pass so both render paths agree:
+#   (?<!\\)     opening `$` is not an escaped `\$`
+#   (?![\s$\d]) opening `$` is NOT followed by space, `$`, or a DIGIT.
+#               Currency always leads with a digit ($611, $1,500, $0.05),
+#               so it can never OPEN a span. This also stops a currency
+#               `$` from swallowing a later math opener: "$800 ... $X" --
+#               `$800` never opens, so `$X \approx 0.03$` is matched on
+#               its own.
+#   [^$\n]{,400}? shortest run up to the closing `$`, never crossing a
+#               newline or another `$`
+#   \$(?!\d)    the closing `$` is NOT followed by a digit, so two amounts
+#               ("$50 then $611") never pair either.
+# Trade-off: a genuine digit-leading span like `$0.05$` is treated as
+# non-math here. That is rare and ambiguous with currency; pandoc, the
+# primary path, still renders it via its own reader.
+INLINE_MATH_RE = re.compile(r"(?<!\\)\$(?![\s$\d])[^$\n]{0,400}?\$(?!\d)")
+# Display math `$$...$$` is unambiguous (currency is never written this
+# way), so it is always treated as math.
+DISPLAY_MATH_RE = re.compile(r"(?<!\\)\$\$[\s\S]+?\$\$")
+
+# Alphanumeric placeholder for the markdown fallback path. Letters only,
+# no underscores, so the markdown package leaves it untouched (it would
+# otherwise strip the backslashes out of `\(`/`\[` -- see _protect_math).
+_MATH_TOKEN = "zzmathjaxprotectedspan"
 
 
 def has_math(md_text: str) -> bool:
-    return bool(MATH_RE.search(md_text))
+    """True iff the source contains genuine math (never for currency).
+
+    A brief with only currency dollars ("spend $611 ... $1,500/month")
+    returns False, so MathJax is not injected at all.
+    """
+    return bool(DISPLAY_MATH_RE.search(md_text) or INLINE_MATH_RE.search(md_text))
+
+
+def convert_math_delimiters(md_text: str) -> str:
+    """Rewrite genuine `$...$`/`$$...$$` math as `\\(...\\)`/`\\[...\\]`,
+    leaving currency dollars as literal `$`.
+
+    This is the pure transform behind the markdown fallback; the live
+    fallback path uses `_protect_math` instead because the markdown
+    package would eat the backslash delimiters (`\\(x\\)` -> `(x)`).
+    """
+    text = DISPLAY_MATH_RE.sub(lambda m: r"\[" + m.group(0)[2:-2] + r"\]", md_text)
+    return INLINE_MATH_RE.sub(lambda m: r"\(" + m.group(0)[1:-1] + r"\)", text)
+
+
+def _protect_math(md_text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Replace genuine math spans with inert alphanumeric placeholders,
+    returning the rewritten text and an ordered (token, tex) list.
+
+    Used only on the markdown fallback path: the markdown package strips
+    the backslashes out of `\\(`/`\\[`, so math must be pulled out before
+    rendering and stitched back in afterwards as `\\(...\\)`/`\\[...\\]`.
+    """
+    spans: list[tuple[str, str]] = []
+
+    def display_repl(m: re.Match[str]) -> str:
+        tok = f"{_MATH_TOKEN}{len(spans)}zz"
+        spans.append((tok, r"\[" + m.group(0)[2:-2] + r"\]"))
+        return tok
+
+    text = DISPLAY_MATH_RE.sub(display_repl, md_text)
+
+    def inline_repl(m: re.Match[str]) -> str:
+        tok = f"{_MATH_TOKEN}{len(spans)}zz"
+        spans.append((tok, r"\(" + m.group(0)[1:-1] + r"\)"))
+        return tok
+
+    text = INLINE_MATH_RE.sub(inline_repl, text)
+    return text, spans
 
 
 def render_with_pandoc(md_text: str) -> str | None:
@@ -60,11 +133,19 @@ def render_with_pandoc(md_text: str) -> str | None:
 def render_with_markdown(md_text: str) -> str:
     import markdown
 
-    return markdown.markdown(
-        md_text,
+    # Pull math out before rendering: the markdown package strips the
+    # backslashes from `\(`/`\[`, so we substitute inert placeholders,
+    # render, then splice the `\(...\)`/`\[...\]` spans back in for
+    # MathJax to pick up in the browser.
+    protected, spans = _protect_math(md_text)
+    body = markdown.markdown(
+        protected,
         extensions=["fenced_code", "tables", "sane_lists"],
         output_format="html5",
     )
+    for token, tex in spans:
+        body = body.replace(token, tex)
+    return body
 
 
 # Single embedded stylesheet. Mobile-first, system fonts, dark-mode aware,
@@ -159,12 +240,15 @@ th, td {
 """.strip()
 
 
-MATHJAX = """
+MATHJAX = r"""
 <script>
 window.MathJax = {
   tex: {
-    inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
-    displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
+    // ONLY \(...\)/\[...\] -- never bare `$` -- so MathJax's in-browser
+    // scanner cannot pair currency dollars ("$200 ... $1,500") into
+    // bogus inline math. Both render paths emit these delimiters.
+    inlineMath: [['\\(', '\\)']],
+    displayMath: [['\\[', '\\]']]
   },
   options: { renderActions: { addMenu: [] } }
 };
@@ -203,18 +287,14 @@ def extract_title(md_text: str, fallback: str) -> str:
     return fallback
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("input", type=Path)
-    ap.add_argument("output", type=Path)
-    args = ap.parse_args()
-
-    if not args.input.is_file():
-        print(f"ERROR: not a file: {args.input}", file=sys.stderr)
+def render_file(input_path: Path, output_path: Path) -> int:
+    """Render a markdown brief file to a self-contained HTML file."""
+    if not input_path.is_file():
+        print(f"ERROR: not a file: {input_path}", file=sys.stderr)
         return 2
 
-    md_text = args.input.read_text(encoding="utf-8")
-    title = extract_title(md_text, args.input.stem)
+    md_text = input_path.read_text(encoding="utf-8")
+    title = extract_title(md_text, input_path.stem)
 
     body = render_with_pandoc(md_text)
     if body is None:
@@ -229,8 +309,16 @@ def main() -> int:
             return 1
 
     html_doc = wrap(body, title=title, with_mathjax=has_math(md_text))
-    args.output.write_text(html_doc, encoding="utf-8")
+    output_path.write_text(html_doc, encoding="utf-8")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("input", type=Path)
+    ap.add_argument("output", type=Path)
+    args = ap.parse_args()
+    return render_file(args.input, args.output)
 
 
 if __name__ == "__main__":

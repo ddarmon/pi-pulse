@@ -50,6 +50,87 @@ URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
 
+-   **Feedback-informed plan + per-thread cap (2026-07-05).** The
+    daily plan stage now consumes the reader-feedback digest, and a
+    per-thread diversity cap ships in the same change -- deliberately
+    bundled, because "more like this" steering without a thread cap
+    amplifies monoculture. What changed: `pulse.sh` attaches
+    `.tmp/feedback_recent.md` to the compose_plan pi call (after
+    `recent_pulses.md`), guarantees a stub digest exists when ingest
+    failed or never ran (a dangling `@`-attachment could sink the
+    call), and logs a one-line census before plan (`feedback digest:
+    17 valued / 2 neutral / 3 not-valued / 1 avoid`, or `feedback
+    digest: empty`), also echoed into `summary.md`.
+    `build_feedback_digest.py` gains a `## Tendencies` header section
+    (per-tag rated count + signed mean, e.g. `- tracked: 12 rated,
+    mean +1.3`); the empty-window stub is byte-identical to before.
+    `compose_plan.md` gains a Reader feedback rules section: valued
+    cards break ties between comparable candidates (a reader `note:`
+    is a direct instruction); not-valued topics are down-ranked and
+    never beat an unrated alternative for a quota's last slot;
+    avoid-candidates require a fresh dated memo signal plus an
+    explicit rationale; neutral and empty digests impose nothing;
+    GUARDRAILS: feedback re-ranks WITHIN quotas -- never exceeds a
+    cap, pads a thin day, or duplicates a topic. When feedback
+    materially drove a pick/skip, the slot's rationale appends one
+    `Feedback:` sentence (free text; `split_plan.py` ignores it).
+    The per-thread cap: at most 2 cards per brief may share a
+    `memo_anchor` or serve the same single project/thread, binding
+    BEFORE feedback steering. Evidence: a week-long multi-agent
+    review found one active project took ~23% of the week's cards
+    (2026-06-29 -> 07-05) with a same-story duplicate pair on 07-05
+    -- per-tag caps alone don't bound per-thread concentration.
+    Validation: watch the census log line on the next runs, and grep
+    `plan.log.md` / the plan output for `Feedback:` attributions to
+    confirm the model is actually consulting the digest. Tests:
+    `tests/test_build_feedback_digest.py` (Tendencies math, stub
+    byte-compare, census-awk parseability via subprocess).
+
+-   **Currency-vs-math rendering fix (2026-07-05).** Long-standing
+    bug: briefs mixing currency dollars and TeX math ("Tesla's
+    $200/week ... $S_{\text{token}} \leq ...$") rendered with bogus
+    italic math runs. Diagnosis (adversarial agent, empirical): pandoc
+    paired nothing wrong -- the shipped MathJax config declared
+    `inlineMath: [['$','$'],...]`, so MathJax RE-SCANNED the DOM in
+    the browser and paired leftover literal currency dollars. Fix in
+    `sources/render_html.py`: MathJax now gets only `\(...\)`/`\[...\]`
+    delimiters; the pandoc path already emits those, and the
+    python-markdown fallback gains a protect-render-splice pre-pass
+    (the `markdown` package strips backslashes from `\(`) plus a
+    pandoc-rule-mirroring `$` discriminator (opener/closer never
+    digit-adjacent) so `has_math` no longer fires on currency-only
+    briefs. 22 new tests in `tests/test_render_html.py`. All 64
+    existing briefs re-rendered and delivery copies refreshed. Known
+    residual: digit-leading inline math like `$0.05$` renders
+    literally on the RARELY-USED fallback path only (pandoc path
+    correct).
+
+-   **Feedback web server (2026-07-05).** Rating had lapsed entirely
+    after 2026-06-13 (interview: terminal friction -- the user reads
+    the HTML brief in a browser, often not at a keyboard). New
+    stdlib-only server (`sources/feedback_server.py`, launcher
+    `scripts/feedback-server.sh`, launchd KeepAlive template
+    `launchd/com.user.pi-pulse-feedback.plist.template`) serves a
+    brief index plus each `out/*.html` with an injected per-card
+    rating bar (marks + note) and writes edits into the existing
+    `out/*.feedback.md` grammar via `POST /api/rate`, reusing
+    `review_feedback.parse_feedback_file`/`serialize_feedback` --
+    no second grammar, ingest sweeps the files unchanged. Deployment
+    target is the Tailscale network: `PI_PULSE_FEEDBACK_HOST=tailscale`
+    in `.env` (autodetect; default `127.0.0.1`), port 8377. Security:
+    tailnet is the boundary; client-IP allowlist (loopback +
+    100.64.0.0/10 + ts IPv6 ULA), RUN_ID regex on every path, 16 KB
+    POST cap (negative Content-Length rejected -- adversarial-review
+    fix), atomic locked writes, no static serving, and deliberately no
+    CSP on brief pages (inline MathJax would break). `tests/` (new dir,
+    31 unittest cases incl. live-HTTP e2e) via
+    `python3 -m unittest discover tests`. Verified against real
+    pandoc-rendered briefs: widget injection, mark/note round-trip
+    through `ingest_feedback.py`, traversal 404s. Follow-up candidates:
+    feed `.tmp/feedback_recent.md` into compose_plan (shipped
+    2026-07-05, see the top entry), an "ingest now" affordance, and
+    HTTPS via `tailscale serve` if ever wanted.
+
 -   **Profile-suggest, core (2026-06-13).** Weekly, human-gated
     surfacing of drift between `memory/interests.md` and recent
     activity. `pulse.sh` step 2b archives each distill memo to
@@ -86,13 +167,18 @@ URL resolves but whose claims don't match the page content.
     bookkeeping. New files: `sources/build_feedback_template.py`,
     `sources/ingest_feedback.py`, `sources/build_feedback_digest.py`,
     `scripts/ingest-feedback.sh`. `pulse.sh` generates + delivers the
-    companion file (non-fatal). Nothing in the daily pipeline consumes
-    the digest yet -- it is the intended input to backlog item 1
-    (weekly profile-suggest). `[--]` does not auto-suppress topics; it
-    only flags avoid-candidates for the weekly review.
+    companion file (non-fatal). The digest is now consumed daily by
+    the plan stage (shipped 2026-07-05, see the top entry) as well as
+    by the weekly profile-suggest. `[--]` does not auto-suppress
+    topics; it flags avoid-candidates that plan may only re-cover on
+    a fresh, dated memo signal.
     `scripts/ingest-feedback.sh --all` (default) sweeps every feedback
-    file; `pulse.sh` step 1c runs it each pulse so manual ingest is
-    normally unnecessary. An interactive single-keypress reviewer
+    file; `pulse.sh` runs the same sweep each pulse -- but calls
+    `uv run sources/ingest_feedback.py --all` *inline* rather than via
+    the wrapper script, a deliberate fix for the launchd `uv`
+    "current directory does not exist" abort that fires when ingest is
+    invoked from a child script -- so manual ingest is normally
+    unnecessary. An interactive single-keypress reviewer
     (`scripts/review-feedback.sh` -> `sources/review_feedback.py`,
     zero-dependency stdlib termios) shows each card's prose and writes
     marks back to the markdown; default queue is all unrated cards

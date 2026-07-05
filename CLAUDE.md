@@ -40,7 +40,13 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     copied verbatim from `.tmp/signals.md` -- plan never invents URLs
     or topics. `PI_PULSE_CARDS_{TRACKED,ADJACENT,BRIDGE,FOLLOWUP}` are
     CAPS, not targets: on slow signal days the brief shrinks rather
-    than padding. Default caps 5/2/1/1.
+    than padding. Default caps 5/2/1/1. The reader-feedback digest
+    (`.tmp/feedback_recent.md`) is attached as a ranking prior:
+    valued topics break ties, not-valued topics are down-ranked,
+    avoid-candidates need a fresh dated signal -- always within the
+    quotas, never to pad. A per-thread diversity cap (at most 2 cards
+    per `memo_anchor`/thread) binds before feedback steering so
+    "more like this" cannot concentrate the brief onto one thread.
 5.  **expand** -- `sources/split_plan.py` writes one
     `.tmp/expand/NN/slot.md` per planned card, verifying each slot's
     `Source URL:` against `.tmp/signals.md` (normalized comparison);
@@ -193,9 +199,49 @@ reviewed and is skipped. The whole path makes
 **zero model calls**. Note a run cannot ingest its *own* feedback file
 (written at deliver, all-unrated at that point) -- today's edits are
 swept up by tomorrow's run.
-The digest is consumed by the profile-suggest stage (below). Unrated
+The digest is consumed daily by the plan stage (attached to the
+compose_plan pi call as a ranking prior, with a `## Tendencies`
+per-tag summary up top; pulse.sh logs a one-line census of it before
+plan and guarantees a stub exists so the attachment never dangles) and
+weekly by the profile-suggest stage (below). Unrated
 (`[ ]`) cards are skipped; `[--]` does not auto-suppress a topic (the URL
-is already in `seen_urls.jsonl`), it only flags an avoid-candidate.
+is already in `seen_urls.jsonl`), it only flags an avoid-candidate --
+plan may still cover such a topic when today's memo names a fresh,
+dated signal, and must say so in the slot's rationale.
+
+A third rating path is the **feedback web server**
+(`scripts/feedback-server.sh` -> `sources/feedback_server.py`, stdlib
+only, zero dependencies): it serves an index of briefs and each
+`out/${RUN_ID}.html` with a rating bar injected under every card
+(marks + one-line note), and writes edits into the same
+`out/${RUN_ID}.feedback.md` grammar via `POST /api/rate` (locked,
+atomic rewrite through `review_feedback.parse_feedback_file`/
+`serialize_feedback` -- never a second grammar). Intended deployment is
+the user's Tailscale network: set `PI_PULSE_FEEDBACK_HOST=tailscale` in
+`.env` (autodetects the tailnet IPv4; default bind is `127.0.0.1`;
+`PI_PULSE_FEEDBACK_PORT` default 8377) and load
+`launchd/com.user.pi-pulse-feedback.plist.template` (KeepAlive) to run
+it persistently. Security model: the tailnet is the auth boundary;
+defense-in-depth is a client-IP allowlist (loopback + `100.64.0.0/10`
++ Tailscale IPv6 ULA -- everything else 403s even if misbound),
+strict `RUN_ID` regex on every path construction, a 16 KB POST cap,
+and no static file serving. The brief pages are intentionally served
+WITHOUT a CSP: `render_html.py` output uses inline scripts and CDN
+MathJax, and a strict CSP would break math rendering -- don't "harden"
+this without checking that. The server only ever writes
+`out/*.feedback.md`; ingest sweeps them on the next run as usual.
+
+**Deployment state (this machine):** the server is INSTALLED and
+running under launchd as `com.user.pi-pulse-feedback` (plist at
+`~/Library/LaunchAgents/`, installed 2026-07-05), bound to the
+Tailscale IP via `PI_PULSE_FEEDBACK_HOST=tailscale` in `.env`.
+KeepAlive restarts it on crash and at login -- but NOT on code
+change: after editing `sources/feedback_server.py` (or `.env`), run
+`launchctl kickstart -k gui/$UID/com.user.pi-pulse-feedback` or the
+old code keeps serving. Never start a second instance manually while
+the launchd job holds the port (EADDRINUSE crash-loop). Logs:
+`logs/feedback-server.{out,err}.log`. User-facing setup steps live in
+README.md ("Rate cards from your phone").
 
 ## Profile-suggest (weekly, manual)
 
