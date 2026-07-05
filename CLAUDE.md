@@ -231,6 +231,18 @@ MathJax, and a strict CSP would break math rendering -- don't "harden"
 this without checking that. The server only ever writes
 `out/*.feedback.md`; ingest sweeps them on the next run as usual.
 
+**Deployment state (this machine):** the server is INSTALLED and
+running under launchd as `com.user.pi-pulse-feedback` (plist at
+`~/Library/LaunchAgents/`, installed 2026-07-05), bound to the
+Tailscale IP via `PI_PULSE_FEEDBACK_HOST=tailscale` in `.env`.
+KeepAlive restarts it on crash and at login -- but NOT on code
+change: after editing `sources/feedback_server.py` (or `.env`), run
+`launchctl kickstart -k gui/$UID/com.user.pi-pulse-feedback` or the
+old code keeps serving. Never start a second instance manually while
+the launchd job holds the port (EADDRINUSE crash-loop). Logs:
+`logs/feedback-server.{out,err}.log`. User-facing setup steps live in
+README.md ("Rate cards from your phone").
+
 ## Profile-suggest (weekly, manual)
 
 A human-gated weekly step that surfaces drift between the durable

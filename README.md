@@ -125,6 +125,46 @@ On Linux, write a systemd timer with `Persistent=true` against
 `pulse.sh` instead; the script itself has no macOS-specific dependencies
 beyond the launchd template.
 
+## Rate cards from your phone (feedback server)
+
+A small stdlib-only web server serves each brief with a rating bar
+under every card and writes marks into the same `out/*.feedback.md`
+files the nightly ingest sweeps. Intended deployment is a private
+[Tailscale](https://tailscale.com) network: the tailnet provides
+transport security and authentication, and the server refuses any
+client that is not loopback or a Tailscale address even if misbound.
+
+```bash
+# In .env: bind the machine's Tailscale IP (autodetected via the
+# tailscale CLI). Default is 127.0.0.1 (loopback only).
+#   PI_PULSE_FEEDBACK_HOST=tailscale
+#   PI_PULSE_FEEDBACK_PORT=8377   # default
+
+# Run in the foreground to try it:
+./scripts/feedback-server.sh
+
+# Keep it running permanently (macOS launchd, KeepAlive):
+sed -e "s|{{REPO}}|$PWD|g" \
+    -e "s|{{HOME}}|$HOME|g" \
+    -e "s|{{PATH}}|/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin|g" \
+    launchd/com.user.pi-pulse-feedback.plist.template \
+    > ~/Library/LaunchAgents/com.user.pi-pulse-feedback.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.pi-pulse-feedback.plist
+
+# Logs:
+tail -f logs/feedback-server.out.log logs/feedback-server.err.log
+
+# Restart (required after editing sources/feedback_server.py or .env):
+launchctl kickstart -k gui/$UID/com.user.pi-pulse-feedback
+
+# Stop:
+launchctl bootout gui/$(id -u)/com.user.pi-pulse-feedback
+```
+
+Then open `http://<machine-tailnet-name>:8377/` from any device on
+your tailnet (MagicDNS). Ratings you enter steer the next morning's
+plan stage via the feedback digest; no manual ingest needed.
+
 ## Tuning
 
 -   Edit `memory/interests.md` -- it feeds every run. Or run
