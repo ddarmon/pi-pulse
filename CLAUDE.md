@@ -197,6 +197,28 @@ The digest is consumed by the profile-suggest stage (below). Unrated
 (`[ ]`) cards are skipped; `[--]` does not auto-suppress a topic (the URL
 is already in `seen_urls.jsonl`), it only flags an avoid-candidate.
 
+A third rating path is the **feedback web server**
+(`scripts/feedback-server.sh` -> `sources/feedback_server.py`, stdlib
+only, zero dependencies): it serves an index of briefs and each
+`out/${RUN_ID}.html` with a rating bar injected under every card
+(marks + one-line note), and writes edits into the same
+`out/${RUN_ID}.feedback.md` grammar via `POST /api/rate` (locked,
+atomic rewrite through `review_feedback.parse_feedback_file`/
+`serialize_feedback` -- never a second grammar). Intended deployment is
+the user's Tailscale network: set `PI_PULSE_FEEDBACK_HOST=tailscale` in
+`.env` (autodetects the tailnet IPv4; default bind is `127.0.0.1`;
+`PI_PULSE_FEEDBACK_PORT` default 8377) and load
+`launchd/com.user.pi-pulse-feedback.plist.template` (KeepAlive) to run
+it persistently. Security model: the tailnet is the auth boundary;
+defense-in-depth is a client-IP allowlist (loopback + `100.64.0.0/10`
++ Tailscale IPv6 ULA -- everything else 403s even if misbound),
+strict `RUN_ID` regex on every path construction, a 16 KB POST cap,
+and no static file serving. The brief pages are intentionally served
+WITHOUT a CSP: `render_html.py` output uses inline scripts and CDN
+MathJax, and a strict CSP would break math rendering -- don't "harden"
+this without checking that. The server only ever writes
+`out/*.feedback.md`; ingest sweeps them on the next run as usual.
+
 ## Profile-suggest (weekly, manual)
 
 A human-gated weekly step that surfaces drift between the durable

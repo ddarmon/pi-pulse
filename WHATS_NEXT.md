@@ -50,6 +50,32 @@ URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
 
+-   **Feedback web server (2026-07-05).** Rating had lapsed entirely
+    after 2026-06-13 (interview: terminal friction -- the user reads
+    the HTML brief in a browser, often not at a keyboard). New
+    stdlib-only server (`sources/feedback_server.py`, launcher
+    `scripts/feedback-server.sh`, launchd KeepAlive template
+    `launchd/com.user.pi-pulse-feedback.plist.template`) serves a
+    brief index plus each `out/*.html` with an injected per-card
+    rating bar (marks + note) and writes edits into the existing
+    `out/*.feedback.md` grammar via `POST /api/rate`, reusing
+    `review_feedback.parse_feedback_file`/`serialize_feedback` --
+    no second grammar, ingest sweeps the files unchanged. Deployment
+    target is the Tailscale network: `PI_PULSE_FEEDBACK_HOST=tailscale`
+    in `.env` (autodetect; default `127.0.0.1`), port 8377. Security:
+    tailnet is the boundary; client-IP allowlist (loopback +
+    100.64.0.0/10 + ts IPv6 ULA), RUN_ID regex on every path, 16 KB
+    POST cap (negative Content-Length rejected -- adversarial-review
+    fix), atomic locked writes, no static serving, and deliberately no
+    CSP on brief pages (inline MathJax would break). `tests/` (new dir,
+    31 unittest cases incl. live-HTTP e2e) via
+    `python3 -m unittest discover tests`. Verified against real
+    pandoc-rendered briefs: widget injection, mark/note round-trip
+    through `ingest_feedback.py`, traversal 404s. Follow-up candidates:
+    feed `.tmp/feedback_recent.md` into compose_plan (daily payoff),
+    an "ingest now" affordance, and HTTPS via `tailscale serve` if
+    ever wanted.
+
 -   **Profile-suggest, core (2026-06-13).** Weekly, human-gated
     surfacing of drift between `memory/interests.md` and recent
     activity. `pulse.sh` step 2b archives each distill memo to
@@ -91,8 +117,12 @@ URL resolves but whose claims don't match the page content.
     (weekly profile-suggest). `[--]` does not auto-suppress topics; it
     only flags avoid-candidates for the weekly review.
     `scripts/ingest-feedback.sh --all` (default) sweeps every feedback
-    file; `pulse.sh` step 1c runs it each pulse so manual ingest is
-    normally unnecessary. An interactive single-keypress reviewer
+    file; `pulse.sh` runs the same sweep each pulse -- but calls
+    `uv run sources/ingest_feedback.py --all` *inline* rather than via
+    the wrapper script, a deliberate fix for the launchd `uv`
+    "current directory does not exist" abort that fires when ingest is
+    invoked from a child script -- so manual ingest is normally
+    unnecessary. An interactive single-keypress reviewer
     (`scripts/review-feedback.sh` -> `sources/review_feedback.py`,
     zero-dependency stdlib termios) shows each card's prose and writes
     marks back to the markdown; default queue is all unrated cards
