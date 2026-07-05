@@ -50,6 +50,25 @@ URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
 
+-   **Currency-vs-math rendering fix (2026-07-05).** Long-standing
+    bug: briefs mixing currency dollars and TeX math ("Tesla's
+    $200/week ... $S_{\text{token}} \leq ...$") rendered with bogus
+    italic math runs. Diagnosis (adversarial agent, empirical): pandoc
+    paired nothing wrong -- the shipped MathJax config declared
+    `inlineMath: [['$','$'],...]`, so MathJax RE-SCANNED the DOM in
+    the browser and paired leftover literal currency dollars. Fix in
+    `sources/render_html.py`: MathJax now gets only `\(...\)`/`\[...\]`
+    delimiters; the pandoc path already emits those, and the
+    python-markdown fallback gains a protect-render-splice pre-pass
+    (the `markdown` package strips backslashes from `\(`) plus a
+    pandoc-rule-mirroring `$` discriminator (opener/closer never
+    digit-adjacent) so `has_math` no longer fires on currency-only
+    briefs. 22 new tests in `tests/test_render_html.py`. All 64
+    existing briefs re-rendered and delivery copies refreshed. Known
+    residual: digit-leading inline math like `$0.05$` renders
+    literally on the RARELY-USED fallback path only (pandoc path
+    correct).
+
 -   **Feedback web server (2026-07-05).** Rating had lapsed entirely
     after 2026-06-13 (interview: terminal friction -- the user reads
     the HTML brief in a browser, often not at a keyboard). New
