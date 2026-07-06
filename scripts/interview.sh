@@ -10,8 +10,8 @@
 # Behavior:
 #   - If memory/interests.md does not exist, seed it from the example.
 #   - Snapshot the current profile to memory/interests-history/.
-#   - Launch pi interactively with prompts/interview.md as the system
-#     prompt and the current profile attached.
+#   - Launch pi interactively with prompts/interview.md and the
+#     current profile both attached to the first user message.
 #   - On exit, print a diff against the snapshot. If unchanged, the
 #     snapshot is discarded.
 #
@@ -66,10 +66,15 @@ echo "[interview] session : $SESSION_DIR"
 echo "[interview] launching pi (${PI_PROVIDER}/${PI_MODEL})"
 echo
 
+# The interview prompt is delivered as the first @file attachment, not
+# via --system-prompt: pi's --system-prompt (and --append-system-prompt)
+# is silently dropped by the ollama OpenAI-compat provider path --- the
+# string never enters the /v1/chat/completions payload (verified by token
+# accounting 2026-07-05). Do not switch back.
 pi --provider "$PI_PROVIDER" --model "$PI_MODEL" \
-   --system-prompt "$(cat "$PROMPT")" \
    --no-skills \
    --session-dir "$SESSION_DIR" \
+   @"$PROMPT" \
    @"$PROFILE" \
    "Begin the interview." || true
 
