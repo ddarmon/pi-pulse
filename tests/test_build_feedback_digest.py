@@ -13,10 +13,12 @@ shell snippet is replicated in a subprocess test.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sources"))
@@ -172,6 +174,140 @@ class SectionStructureTests(unittest.TestCase):
         text = build_feedback_digest.render([row(1), row(1, tag="bridge")], 14)
         self.assertIn("## Tendencies", text)
         self.assertEqual(census(text), "2 valued / 0 neutral / 0 not-valued / 0 avoid")
+
+
+class DeliveryWindowTests(unittest.TestCase):
+    """load_rows windows on the delivery date parsed from run_id."""
+
+    def _write(self, rows: list[dict]) -> Path:
+        f = tempfile.NamedTemporaryFile(
+            "w", suffix=".jsonl", delete=False
+        )
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+        f.close()
+        self.addCleanup(Path(f.name).unlink)
+        return Path(f.name)
+
+    def test_windows_on_run_id_not_rating_date(self) -> None:
+        # A bulk rating session on 2026-07-06 rates a May brief. The
+        # rating `date` is inside a 14-day window, but the May delivery
+        # date is not -- so the row must be excluded.
+        ledger = self._write(
+            [
+                {"run_id": "2026-05-17", "title": "old", "rating": 1, "tag": "tracked", "date": "2026-07-06"},
+            ]
+        )
+        rows = build_feedback_digest.load_rows(ledger, date(2026, 7, 1))
+        self.assertEqual(rows, [])
+
+    def test_hhmm_run_id_form_parses(self) -> None:
+        ledger = self._write(
+            [
+                {"run_id": "2026-07-05-0514", "title": "fresh", "rating": 1, "tag": "tracked", "date": "2026-07-06"},
+            ]
+        )
+        rows = build_feedback_digest.load_rows(ledger, date(2026, 7, 1))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["_delivery"], date(2026, 7, 5))
+
+    def test_falls_back_to_date_when_run_id_missing_or_bad(self) -> None:
+        ledger = self._write(
+            [
+                {"title": "no-runid", "rating": 1, "tag": "tracked", "date": "2026-07-05"},
+                {"run_id": "not-a-date", "title": "bad-runid", "rating": 1, "tag": "tracked", "date": "2026-07-04"},
+            ]
+        )
+        rows = build_feedback_digest.load_rows(ledger, date(2026, 7, 1))
+        self.assertEqual({r["title"] for r in rows}, {"no-runid", "bad-runid"})
+        by_title = {r["title"]: r["_delivery"] for r in rows}
+        self.assertEqual(by_title["no-runid"], date(2026, 7, 5))
+        self.assertEqual(by_title["bad-runid"], date(2026, 7, 4))
+
+    def test_display_shows_delivery_date_not_rating_date(self) -> None:
+        ledger = self._write(
+            [
+                {"run_id": "2026-07-05-0514", "title": "fresh", "rating": 1, "tag": "tracked", "date": "2026-07-06"},
+            ]
+        )
+        rows = build_feedback_digest.load_rows(ledger, date(2026, 7, 1))
+        line = build_feedback_digest.fmt(rows[0])
+        self.assertIn("[2026-07-05]", line)
+        self.assertNotIn("2026-07-06", line)
+
+
+class TruncationTests(unittest.TestCase):
+    def _rows(self, n: int) -> list[dict]:
+        # n valued rows on distinct delivery dates, plus one neutral.
+        rows = []
+        for i in range(n):
+            rows.append(
+                {
+                    "run_id": f"2026-07-{i + 1:02d}",
+                    "title": f"card {i}",
+                    "rating": 1,
+                    "tag": "tracked",
+                    "_delivery": date(2026, 7, i + 1),
+                }
+            )
+        return rows
+
+    def test_section_truncates_and_reports_hidden_count(self) -> None:
+        text = build_feedback_digest.render(self._rows(5), 14, max_per_section=2)
+        valued = text.split("## Valued")[1].split("##")[0]
+        # 2 shown + the overflow line.
+        self.assertEqual(valued.count("\n- "), 3)
+        self.assertIn("- (... and 3 more not shown)", valued)
+
+    def test_no_overflow_line_when_under_cap(self) -> None:
+        text = build_feedback_digest.render(self._rows(2), 14, max_per_section=5)
+        self.assertNotIn("more not shown", text)
+
+    def test_truncation_keeps_newest_delivery_first(self) -> None:
+        text = build_feedback_digest.render(self._rows(5), 14, max_per_section=2)
+        # Newest two delivery dates are 07-05 and 07-04.
+        self.assertIn("[2026-07-05]", text)
+        self.assertIn("[2026-07-04]", text)
+        self.assertNotIn("[2026-07-01]", text)
+
+    def test_tendencies_computed_over_all_rows_not_truncated(self) -> None:
+        text = build_feedback_digest.render(self._rows(5), 14, max_per_section=2)
+        tend = text.split("## Tendencies")[1].split("##")[0]
+        self.assertIn("tracked: 5 rated", tend)
+
+    def test_default_zero_is_unlimited(self) -> None:
+        text = build_feedback_digest.render(self._rows(5), 14)
+        self.assertNotIn("more not shown", text)
+        self.assertEqual(census(text), "5 valued / 0 neutral / 0 not-valued / 0 avoid")
+
+
+class DroppedRowFilterTests(unittest.TestCase):
+    def test_dropped_rows_excluded_from_load(self) -> None:
+        f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        for r in (
+            {"run_id": "2026-07-05", "title": "Dropped from this run", "rating": 1, "tag": "tracked", "date": "2026-07-05"},
+            {"run_id": "2026-07-05", "title": "  Dropped from this run  ", "rating": -1, "tag": "tracked", "date": "2026-07-05"},
+            {"run_id": "2026-07-05", "title": "Real card", "rating": 1, "tag": "tracked", "date": "2026-07-05"},
+        ):
+            f.write(json.dumps(r) + "\n")
+        f.close()
+        self.addCleanup(Path(f.name).unlink)
+        rows = build_feedback_digest.load_rows(Path(f.name), date(2026, 7, 1))
+        self.assertEqual([r["title"] for r in rows], ["Real card"])
+
+    def test_dropped_rows_absent_from_render_and_tendencies(self) -> None:
+        f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        for r in (
+            {"run_id": "2026-07-05", "title": "Dropped from this run", "rating": 1, "tag": "tracked", "date": "2026-07-05"},
+            {"run_id": "2026-07-05", "title": "Real card", "rating": 1, "tag": "tracked", "date": "2026-07-05"},
+        ):
+            f.write(json.dumps(r) + "\n")
+        f.close()
+        self.addCleanup(Path(f.name).unlink)
+        rows = build_feedback_digest.load_rows(Path(f.name), date(2026, 7, 1))
+        text = build_feedback_digest.render(rows, 14)
+        self.assertNotIn("Dropped from this run", text)
+        self.assertIn("tracked: 1 rated", text)
 
 
 if __name__ == "__main__":

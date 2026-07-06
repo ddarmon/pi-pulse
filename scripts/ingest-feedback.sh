@@ -34,6 +34,10 @@ if [[ -f .env ]]; then
   set +a
 fi
 
+# Cap each digest section for the daily plan-stage prior (0 = unlimited).
+# An uncapped digest ballooned the plan-stage pi call (see CLAUDE.md).
+FEEDBACK_DIGEST_MAX="${PI_PULSE_FEEDBACK_DIGEST_MAX:-20}"
+
 # Pull the user's edits back from the delivered copy if it is newer.
 sync_from_delivery() {
   local run_id="$1"
@@ -56,7 +60,7 @@ if [[ -z "$MODE" || "$MODE" == "--all" ]]; then
   if [[ ${#files[@]} -eq 0 ]]; then
     # Nothing edited yet -- still refresh the digest so its window stays
     # current as old ratings roll off, then exit cleanly.
-    uv run sources/build_feedback_digest.py
+    uv run sources/build_feedback_digest.py --max-per-section "$FEEDBACK_DIGEST_MAX"
     echo "[ingest] no feedback files; digest refreshed."
     exit 0
   fi
@@ -76,6 +80,6 @@ else
   uv run sources/ingest_feedback.py "$MODE"
 fi
 
-uv run sources/build_feedback_digest.py
+uv run sources/build_feedback_digest.py --max-per-section "$FEEDBACK_DIGEST_MAX"
 echo "[ingest] ledger: memory/feedback.jsonl"
 echo "[ingest] digest: .tmp/feedback_recent.md"

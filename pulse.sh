@@ -268,10 +268,15 @@ log "sweeping card feedback"
       [[ -f "$dfb" && ( ! -f "$f" || "$dfb" -nt "$f" ) ]] && cp "$dfb" "$f"
     fi
   done
+  # Cap each digest section so the plan-stage prior stays small
+  # (an uncapped digest ballooned the plan pi call; see CLAUDE.md).
   if (( ${#fbfiles[@]} )); then
-    uv run sources/ingest_feedback.py --all && uv run sources/build_feedback_digest.py
+    uv run sources/ingest_feedback.py --all \
+      && uv run sources/build_feedback_digest.py \
+           --max-per-section "${PI_PULSE_FEEDBACK_DIGEST_MAX:-20}"
   else
-    uv run sources/build_feedback_digest.py
+    uv run sources/build_feedback_digest.py \
+      --max-per-section "${PI_PULSE_FEEDBACK_DIGEST_MAX:-20}"
   fi
 } >"$LOG_DIR/ingest-feedback.log" 2>&1 \
   || log "WARN: feedback ingest failed; see $LOG_DIR/ingest-feedback.log"
