@@ -41,13 +41,20 @@ Quotas are CAPS, not targets (this is a change from prior runs):
     `relation: profile-adjacent`. These are durable-profile interests
     that scout surfaced from outside today's active threads.
 -   **Bridge cards: at least 1, up to {{BRIDGE}}** -- pick from
-    signals with `relation: study-bridge` OR `profile-adjacent`
+    signals with `relation: study-bridge`, OR `profile-adjacent`
     signals whose `source_class` is `arxiv`, `paper`,
-    `lecture-notes`, or `tutorial`. This slot protects foundational
-    and theoretical content (math, statistics, complexity science,
-    deep architecture theory) from being crowded out by news-shaped
-    signals. If no qualifying signal exists, emit zero and say so in
-    the rationale -- do not fill the slot with a news-shaped signal.
+    `lecture-notes`, or `tutorial`, OR `memo-anchored` signals whose
+    `source_class` is `arxiv`, `paper`, `lecture-notes`, or
+    `tutorial` AND whose content is foundational/theoretical rather
+    than news-shaped (a dated release, announcement, or product
+    update anchored to a thread does NOT qualify, even from arxiv).
+    This slot protects foundational and theoretical content (math,
+    statistics, complexity science, deep architecture theory) from
+    being crowded out by news-shaped signals. A `memo-anchored`
+    signal chosen here counts as the bridge card and does NOT also
+    consume a tracked slot. If no qualifying signal exists, emit zero
+    and say so in the rationale -- do not fill the slot with a
+    news-shaped signal.
 -   **Follow-up cards: up to {{FOLLOWUP}}** -- a follow-up CONSUMES
     ONE TRACKED SLOT. A candidate is follow-up-eligible only when:
     (a) its `memo_anchor` references the "Active threads" OR
@@ -65,7 +72,14 @@ Quotas are CAPS, not targets (this is a change from prior runs):
     keep the best 2 and spend the freed slots on distinct memo
     anchors or durable-profile interests. This cap binds BEFORE the
     Reader feedback preferences below: valued-topic steering must
-    never concentrate the brief onto one thread.
+    never concentrate the brief onto one thread. When two kept cards
+    DO share a thread/memo_anchor, each card's `Why this card:` must
+    name the distinct facet it covers, and the two must not lead to
+    substantially the same follow-up action or read as two halves of
+    one story (e.g. an article describing a pattern and a package
+    that merely implements that same pattern). When they would, keep
+    the better one and spend the freed slot on a distinct memo anchor
+    or durable-profile interest -- or emit fewer cards.
 
 If the signal sheet does not contain enough qualifying entries to
 fill a cap, **emit fewer cards**. A shorter, fully-grounded brief is

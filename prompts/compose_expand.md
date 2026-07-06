@@ -105,8 +105,14 @@ Typography:
 -   If math appears: vectors as `\mathbf{}` or `\boldsymbol{}`, never
     plain bold. Inline math `$...$`, display math `$$...$$`.
 -   Exactly one inline primary-source link per card.
--   If a card cites a paper, include the identifier (DOI, arXiv ID,
-    or similar) and a one-clause method gloss.
+-   If a card cites a paper, include a one-clause method gloss.
+-   State an identifier (DOI, arXiv ID, or similar), a publication
+    venue, or a journal name ONLY if it appears in the content you
+    actually fetched this session (the `content.js` output or the
+    fallback `search.js` snippet). If the fetched source shows none,
+    describe it as it presents itself (e.g. "a preprint on
+    preprints.org") and do NOT guess or infer a journal, DOI, or
+    publication status.
 
 Output structure (stdout): exactly the card heading and body. No H1.
 No lede paragraph -- the pipeline prepends the brief's H1 and theme

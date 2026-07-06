@@ -192,7 +192,14 @@ drops a run's existing rows before re-adding, so sweeping all files
 every run is safe (unedited files contribute zero rows; already-ingested
 rows are replaced, not duplicated). It then rebuilds
 `.tmp/feedback_recent.md` (last 14 days, grouped valued / neutral /
-not-valued / avoid-candidates) via `build_feedback_digest.py`. `[=]`
+not-valued / avoid-candidates) via `build_feedback_digest.py`. The
+14-day window keys on each card's **delivery date** (the leading
+`YYYY-MM-DD` of its `run_id`), not the rating date, so a bulk rating
+session that rates months of old cards in one day does not make them
+look current; the fallback is the `date` field only when `run_id` is
+missing/unparseable. Digest lines with title `Dropped from this run`
+(ratings against legacy briefs' dropped sections) are filtered out.
+`[=]`
 neutral is a distinct *rated* state (rating 0: reviewed, no strong
 opinion) and produces a ledger row; `[ ]` unrated means not yet
 reviewed and is skipped. The whole path makes
@@ -203,7 +210,12 @@ The digest is consumed daily by the plan stage (attached to the
 compose_plan pi call as a ranking prior, with a `## Tendencies`
 per-tag summary up top; pulse.sh logs a one-line census of it before
 plan and guarantees a stub exists so the attachment never dangles) and
-weekly by the profile-suggest stage (below). Unrated
+weekly by the profile-suggest stage (below). For the daily plan path
+the digest is capped at `PI_PULSE_FEEDBACK_DIGEST_MAX` rows per section
+(default 20; `--max-per-section`, 0 = unlimited) -- an uncapped ~184-row
+digest tripled the plan call's output and latency; `## Tendencies` is
+still computed over every in-window row, not the capped subset. The
+weekly profile-suggest path passes no cap (full digest). Unrated
 (`[ ]`) cards are skipped; `[--]` does not auto-suppress a topic (the URL
 is already in `seen_urls.jsonl`), it only flags an avoid-candidate --
 plan may still cover such a topic when today's memo names a fresh,

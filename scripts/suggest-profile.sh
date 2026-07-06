@@ -53,7 +53,10 @@ fi
 mkdir -p "$SESSION_DIR" .tmp
 
 echo "[suggest] refreshing feedback digest"
-uv run sources/build_feedback_digest.py >/dev/null
+# The weekly suggest stage wants the FULL digest (all rated cards over
+# the window), so it is explicitly uncapped -- unlike the daily plan
+# path, which caps sections via PI_PULSE_FEEDBACK_DIGEST_MAX.
+uv run sources/build_feedback_digest.py --max-per-section 0 >/dev/null
 
 echo "[suggest] building input bundle (${DAYS}d)"
 uv run sources/build_suggest_input.py --days "$DAYS"
