@@ -245,15 +245,21 @@ this without checking that. The server only ever writes
 
 **Deployment state (this machine):** the server is INSTALLED and
 running under launchd as `com.user.pi-pulse-feedback` (plist at
-`~/Library/LaunchAgents/`, installed 2026-07-05), bound to the
-Tailscale IP via `PI_PULSE_FEEDBACK_HOST=tailscale` in `.env`.
-KeepAlive restarts it on crash and at login -- but NOT on code
-change: after editing `sources/feedback_server.py` (or `.env`), run
-`launchctl kickstart -k gui/$UID/com.user.pi-pulse-feedback` or the
-old code keeps serving. Never start a second instance manually while
-the launchd job holds the port (EADDRINUSE crash-loop). Logs:
-`logs/feedback-server.{out,err}.log`. User-facing setup steps live in
-README.md ("Rate cards from your phone").
+`~/Library/LaunchAgents/`, TCC-safe deployment installed 2026-07-20),
+bound to the Tailscale IP via `PI_PULSE_FEEDBACK_HOST=tailscale` in
+`.env`. `scripts/install-feedback-server.sh` installs a stable native
+wrapper at `~/Applications/Pi Pulse Feedback.app`; that app has the
+Documents-folder consent needed to reach this checkout after a cold
+launch. The LaunchAgent must point at the native wrapper and keep its
+logs under `~/Library/Logs/pi-pulse/` -- pointing launchd directly at
+the repo's bash/Python files reintroduces the post-reboot TCC failure.
+KeepAlive restarts it on crash and at login -- but NOT on code change:
+after editing `sources/feedback_server.py` (or `.env`), run
+`launchctl kickstart -k gui/$UID/com.user.pi-pulse-feedback` or the old
+code keeps serving. Never start a second instance manually while the
+launchd job holds the port (EADDRINUSE crash-loop). Logs:
+`~/Library/Logs/pi-pulse/feedback-server.{out,err}.log`. User-facing
+setup steps live in README.md ("Rate cards from your phone").
 
 ## Profile-suggest (weekly, manual)
 

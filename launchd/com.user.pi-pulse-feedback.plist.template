@@ -1,31 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  pi-pulse feedback-server launchd template. Substitute the paths
-  below for your install, then copy to ~/Library/LaunchAgents/ and
-  load with
-  `launchctl load ~/Library/LaunchAgents/com.user.pi-pulse-feedback.plist`.
+  Pi Pulse feedback-server LaunchAgent.
 
-  Placeholders:
-    {{REPO}}    Absolute path to the pi-pulse checkout
-                (e.g. /Users/you/code/pi-pulse)
-    {{HOME}}    Your home directory (e.g. /Users/you)
-    {{PATH}}    A PATH that includes python3 and (for --host tailscale
-                autodetection) the `tailscale` CLI if you have it
-                (e.g. /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin)
+  Install with scripts/install-feedback-server.sh rather than rendering this
+  template by hand. The installer creates a native app wrapper under
+  ~/Applications, obtains its Documents-folder consent, and substitutes:
 
-  Configuration belongs in {{REPO}}/.env, which feedback-server.sh
-  sources before starting the server. launchd does NOT inherit your
-  shell profile (~/.zprofile, ~/.zshrc), so in particular
-  PI_PULSE_FEEDBACK_HOST=tailscale must be set in .env (not exported
-  from your shell) for the scheduled server to bind the tailnet IP.
+    {{REPO}}      Absolute path to the pi-pulse checkout
+    {{HOME}}      User home directory
+    {{APP_EXEC}}  Native executable inside Pi Pulse Feedback.app
+    {{PATH}}      PATH containing the Tailscale CLI
 
-  Bound to the Tailscale IP, any phone/tablet on your tailnet reaches
-  the server at http://<machine-tailnet-name>:8377/ (via MagicDNS)
-  while nothing on the LAN or wider internet can connect -- and the
-  server additionally refuses non-tailnet/non-loopback client IPs.
+  The native app is the stable TCC identity responsible for protected-folder
+  access. Do not point this job directly at bash or Python: a cold launch after
+  reboot would then lack access to a checkout under ~/Documents.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -33,12 +24,16 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>{{REPO}}/scripts/feedback-server.sh</string>
+        <string>{{APP_EXEC}}</string>
+        <string>--serve</string>
+        <string>--repo</string>
+        <string>{{REPO}}</string>
     </array>
 
-    <key>WorkingDirectory</key>
-    <string>{{REPO}}</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.user.pi-pulse-feedback</string>
+    </array>
 
     <key>KeepAlive</key>
     <true/>
@@ -46,11 +41,12 @@
     <key>RunAtLoad</key>
     <true/>
 
+    <!-- Keep launchd's own file operations outside TCC-protected Documents. -->
     <key>StandardOutPath</key>
-    <string>{{REPO}}/logs/feedback-server.out.log</string>
+    <string>{{HOME}}/Library/Logs/pi-pulse/feedback-server.out.log</string>
 
     <key>StandardErrorPath</key>
-    <string>{{REPO}}/logs/feedback-server.err.log</string>
+    <string>{{HOME}}/Library/Logs/pi-pulse/feedback-server.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
