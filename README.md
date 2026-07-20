@@ -143,16 +143,14 @@ client that is not loopback or a Tailscale address even if misbound.
 # Run in the foreground to try it:
 ./scripts/feedback-server.sh
 
-# Keep it running permanently (macOS launchd, KeepAlive):
-sed -e "s|{{REPO}}|$PWD|g" \
-    -e "s|{{HOME}}|$HOME|g" \
-    -e "s|{{PATH}}|/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin|g" \
-    launchd/com.user.pi-pulse-feedback.plist.template \
-    > ~/Library/LaunchAgents/com.user.pi-pulse-feedback.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.pi-pulse-feedback.plist
+# Keep it running permanently (macOS launchd, KeepAlive). The installer
+# creates a native app identity, requests protected-folder access when
+# needed, and installs/starts the LaunchAgent. It requires Apple's Command
+# Line Tools (`xcode-select --install` if `swiftc` is unavailable).
+./scripts/install-feedback-server.sh
 
 # Logs:
-tail -f logs/feedback-server.out.log logs/feedback-server.err.log
+tail -f ~/Library/Logs/pi-pulse/feedback-server.{out,err}.log
 
 # Restart (required after editing sources/feedback_server.py or .env):
 launchctl kickstart -k gui/$UID/com.user.pi-pulse-feedback
@@ -164,6 +162,15 @@ launchctl bootout gui/$(id -u)/com.user.pi-pulse-feedback
 Then open `http://<machine-tailnet-name>:8377/` from any device on
 your tailnet (MagicDNS). Ratings you enter steer the next morning's
 plan stage via the feedback digest; no manual ingest needed.
+
+The native wrapper is required because macOS TCC does not reliably
+attribute access to `Desktop`, `Documents`, or `Downloads` when a bare
+bash/Python LaunchAgent starts after reboot. The wrapper gives the job a
+stable app identity to which macOS can attach folder consent; it does
+not require Full Disk Access. The installer reuses that identity on
+subsequent runs. Use `--rebuild-app` only when changing the native
+wrapper itself, because rebuilding may require granting folder access
+again.
 
 ## Tuning
 
@@ -194,6 +201,11 @@ plan stage via the feedback digest; no manual ingest needed.
     `.tmp/interests_today.md` before tuning the compose prompt -- if it
     says "model architectures" instead of "Sourdough cold-retard at 70% hydration",
     widen the window or add more detail to `memory/interests.md`.
+-   **Feedback server exits with `EX_CONFIG (78)` after reboot.** A bare
+    interpreter LaunchAgent is probably being denied access to a checkout
+    under a TCC-protected folder. Run `./scripts/install-feedback-server.sh`
+    and approve the folder-access prompt; do not grant bash or Python Full
+    Disk Access.
 
 ## License
 

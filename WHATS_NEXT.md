@@ -50,6 +50,22 @@ URL resolves but whose claims don't match the page content.
 
 ## Recently shipped
 
+-   **TCC-safe feedback-server LaunchAgent (2026-07-20).** The original
+    LaunchAgent pointed launchd directly at a bash script inside a checkout
+    under `~/Documents`. It worked when first started from Terminal but,
+    after a cold boot, macOS TCC denied the background job access to the
+    protected Documents folder; launchd reported `EX_CONFIG (78)` before
+    repo-local logs could open. `scripts/install-feedback-server.sh` now
+    compiles a tiny native `Pi Pulse Feedback.app` wrapper with a stable
+    bundle identifier, obtains folder consent in an interactive launch, and
+    points the LaunchAgent at that native executable with
+    `AssociatedBundleIdentifiers`. The wrapper remains the responsible
+    process while bash/Python runs as its child. Launchd logs moved to
+    `~/Library/Logs/pi-pulse/`, outside protected folders. This preserves a
+    user's repository layout without granting broad Full Disk Access to an
+    interpreter. The installer reuses the app identity unless explicitly
+    passed `--rebuild-app`, because rebuilding may require consent again.
+
 -   **Feedback-informed plan + per-thread cap (2026-07-05).** The
     daily plan stage now consumes the reader-feedback digest, and a
     per-thread diversity cap ships in the same change -- deliberately
