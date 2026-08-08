@@ -27,10 +27,10 @@ The server adds defense-in-depth on top:
   parse -> mutate -> serialize -> atomic replace. POST bodies are
   capped at 16 KB.
 * `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` on
-  every response; a strict CSP on server-generated pages. Brief pages
-  get no CSP because render_html.py's output legitimately uses inline
-  scripts and (when math is present) MathJax from cdn.jsdelivr.net --
-  see `_serve_brief`.
+  every response; brief scripts receive a per-response nonce and run
+  under a strict CSP.
+* Rating writes require JSON and reject a foreign browser Origin before
+  reading the request body.
 * No shell-outs except the optional `tailscale ip -4` lookup at startup.
 
 Usage:
@@ -48,13 +48,16 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from render_html import MATHJAX, MATHJAX_NONCE_TOKEN, MATHJAX_VENDOR_DIR, verify_mathjax_vendor
 from review_feedback import VALID_MARKS, parse_feedback_file, serialize_feedback
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -103,6 +106,54 @@ def clean_note(raw: str) -> str:
     """Collapse whitespace (killing newlines, which would break the
     one-line `note:` grammar) and strip."""
     return " ".join(raw.split())
+
+
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def allowed_origin_hosts(bind_host: str, extra_hosts: str | None = None) -> frozenset[str]:
+    """Hostnames that count as this server's own origin.
+
+    The bind address itself, loopback aliases when bound to loopback, and
+    any comma-separated extras (e.g. a MagicDNS name) the operator opted
+    into via PI_PULSE_FEEDBACK_ALLOWED_HOSTS.
+    """
+    hosts = {bind_host.rstrip(".").lower()}
+    if hosts & LOOPBACK_HOSTS:
+        hosts |= LOOPBACK_HOSTS
+    for name in (extra_hosts or "").split(","):
+        name = name.strip().rstrip(".").lower()
+        if name:
+            hosts.add(name)
+    return frozenset(hosts)
+
+
+def origin_allowed(origin: str | None, allowed_hosts: frozenset[str], port: int) -> bool:
+    """True for no Origin (non-browser clients) or an Origin naming this
+    server's own configured identity.
+
+    The Origin is compared against the *configured bind host*, never the
+    client-supplied Host header: trusting Host lets a DNS-rebinding page
+    (an attacker name resolving to this server's IP) present a matching
+    Origin/Host pair and drive the API cross-origin.
+    """
+    if origin is None:
+        return True
+    if origin == "null":
+        return False
+    try:
+        parsed_origin = urlsplit(origin)
+        origin_port = parsed_origin.port or (443 if parsed_origin.scheme == "https" else 80)
+    except ValueError:
+        return False
+    if parsed_origin.scheme not in {"http", "https"}:
+        return False
+    if parsed_origin.username or parsed_origin.password:
+        return False
+    if parsed_origin.path not in {"", "/"} or parsed_origin.query or parsed_origin.fragment:
+        return False
+    hostname = (parsed_origin.hostname or "").rstrip(".").lower()
+    return hostname in allowed_hosts and origin_port == port
 
 
 def apply_rating(text: str, card: int, mark: str, note: str | None) -> tuple[str, dict]:
@@ -172,6 +223,28 @@ def resolve_tailscale_ip() -> str:
         "`tailscale ip -4` on PATH and the Tailscale.app CLI. Is "
         "Tailscale installed and connected? (Or pass an explicit --host.)"
     )
+
+
+def resolve_tailscale_dns_name() -> str | None:
+    """This machine's own MagicDNS name, if available.
+
+    Browsers reaching the server via http://<machine-tailnet-name>:PORT/
+    send that name in the Origin header, so it must count as the server's
+    own identity for the rating API's origin check.
+    """
+    candidates = (
+        ["tailscale", "status", "--json"],
+        ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "status", "--json"],
+    )
+    for cmd in candidates:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            name = json.loads(proc.stdout).get("Self", {}).get("DNSName", "")
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError, AttributeError):
+            continue
+        if proc.returncode == 0 and isinstance(name, str) and name.strip():
+            return name.strip().rstrip(".")
+    return None
 
 
 # --- HTML generation ----------------------------------------------------
@@ -412,16 +485,47 @@ WIDGET_JS = """
 """.strip()
 
 
-def inject_widget(brief_html: str, run_id: str, entries: list[dict]) -> str:
+MATHJAX_SRC_RE = re.compile(
+    r"<script\b(?=[^>]*\bsrc\s*=\s*(['\"])[^'\"]*"
+    r"tex-mml-chtml\.js[^'\"]*\1)[^>]*>\s*</script\s*>",
+    re.IGNORECASE,
+)
+
+
+def activate_mathjax(brief_html: str, nonce: str) -> str:
+    """Nonce only the fixed renderer-owned MathJax program.
+
+    Never replace the nonce marker globally: a historical or hostile script
+    could otherwise copy that marker and inherit the response nonce. Old CDN
+    loader tags are removed and upgraded to the same fixed local build, which
+    keeps historical math working when served under the new CSP.
+    """
+    has_current_block = MATHJAX in brief_html
+    has_mathjax_loader = bool(MATHJAX_SRC_RE.search(brief_html))
+    if not has_current_block and not has_mathjax_loader:
+        return brief_html
+
+    brief_html = brief_html.replace(MATHJAX, "")
+    brief_html = MATHJAX_SRC_RE.sub("", brief_html)
+    trusted_block = MATHJAX.replace(MATHJAX_NONCE_TOKEN, html.escape(nonce, quote=True))
+    head_end = re.search(r"</head\s*>", brief_html, re.IGNORECASE)
+    if head_end:
+        return brief_html[: head_end.start()] + trusted_block + "\n" + brief_html[head_end.start() :]
+    return trusted_block + "\n" + brief_html
+
+
+def inject_widget(brief_html: str, run_id: str, entries: list[dict], nonce: str) -> str:
     """Insert the rating state + widget before </body> (or append)."""
     state = json.dumps({"run_id": run_id, "entries": entries})
     # "</" inside the JSON (e.g. a title containing "</script>") would
     # terminate the script element early; escape it per the HTML spec.
     state = state.replace("</", "<\\/")
+    safe_nonce = html.escape(nonce, quote=True)
+    brief_html = activate_mathjax(brief_html, nonce)
     block = (
-        f"\n<script>window.__pulseState = {state};</script>\n"
+        f'\n<script nonce="{safe_nonce}">window.__pulseState = {state};</script>\n'
         f"<style>\n{WIDGET_CSS}\n</style>\n"
-        f"<script>\n{WIDGET_JS}\n</script>\n"
+        f'<script nonce="{safe_nonce}">\n{WIDGET_JS}\n</script>\n'
     )
     m = re.search(r"</body\s*>", brief_html, re.IGNORECASE)
     if m:
@@ -455,12 +559,28 @@ Re-run the deliver step to regenerate it.</p>
 # --- HTTP handler -------------------------------------------------------
 
 # CSP for pages this module generates itself: no scripts on the index,
-# inline styles only. Brief pages deliberately get NO CSP: render_html.py
-# emits inline <script> blocks and, when the brief contains math, loads
-# MathJax from cdn.jsdelivr.net -- a policy tight enough to be worth
-# having would break those, and the page body is our own trusted render
-# output anyway.
-INDEX_CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+# inline styles only. Brief pages get only nonce-bearing renderer/widget
+# scripts; model-authored and historical raw script tags stay inert.
+INDEX_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+    "frame-ancestors 'none'; form-action 'none'"
+)
+
+
+def brief_csp(nonce: str) -> str:
+    return (
+        f"default-src 'none'; script-src 'nonce-{nonce}'; "
+        "style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; "
+        "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
+        "form-action 'none'"
+    )
+
+
+@lru_cache(maxsize=1)
+def verified_mathjax_vendor() -> bool:
+    """Verify the pinned executable assets once per server process."""
+    verify_mathjax_vendor()
+    return True
 
 
 class FeedbackHandler(BaseHTTPRequestHandler):
@@ -509,10 +629,38 @@ class FeedbackHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/":
             self._send_html(200, index_html(discover_runs(self.out_dir)), csp=INDEX_CSP)
+        elif path.startswith("/brief/assets/mathjax/"):
+            self._serve_mathjax_asset(path[len("/brief/assets/mathjax/") :])
+        elif path.startswith("/assets/mathjax/"):
+            self._serve_mathjax_asset(path[len("/assets/mathjax/") :])
         elif path.startswith("/brief/"):
             self._serve_brief(path[len("/brief/") :])
         else:
             self._not_found()
+
+    def _serve_mathjax_asset(self, relative: str) -> None:
+        """Serve only integrity-checked assets from the pinned vendor tree."""
+        if not relative or not re.fullmatch(r"[A-Za-z0-9_./-]+", relative):
+            self._not_found()
+            return
+        try:
+            verified_mathjax_vendor()
+        except (OSError, RuntimeError):
+            self._not_found()
+            return
+        root = MATHJAX_VENDOR_DIR.resolve()
+        target = (root / relative).resolve()
+        if root not in target.parents or not target.is_file():
+            self._not_found()
+            return
+        if target.suffix == ".js":
+            ctype = "text/javascript; charset=utf-8"
+        elif target.suffix == ".woff":
+            ctype = "font/woff"
+        else:
+            self._not_found()
+            return
+        self._send(200, target.read_bytes(), ctype)
 
     def _serve_brief(self, run_id: str) -> None:
         # The regex gate is what makes the path constructions below safe:
@@ -532,14 +680,26 @@ class FeedbackHandler(BaseHTTPRequestHandler):
         entries: list[dict] = []
         if fb_path.exists():
             _, entries = parse_feedback_file(fb_path.read_text(errors="replace"))
-        page = inject_widget(html_path.read_text(errors="replace"), run_id, entries)
-        self._send_html(200, page)  # no CSP: see INDEX_CSP comment
+        nonce = secrets.token_urlsafe(18)
+        page = inject_widget(html_path.read_text(errors="replace"), run_id, entries, nonce)
+        self._send_html(200, page, csp=brief_csp(nonce))
 
     def do_POST(self) -> None:  # noqa: N802 (http.server API)
         if not self._client_ok():
             return
         if urlsplit(self.path).path != "/api/rate":
             self._not_found()
+            return
+        origin = self.headers.get("Origin")
+        allowed_hosts = self.server.allowed_hosts  # type: ignore[attr-defined]
+        if not origin_allowed(origin, allowed_hosts, self.server.server_address[1]):
+            self._send_json(403, {"ok": False, "error": "bad origin"})
+            self.close_connection = True
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._send_json(415, {"ok": False, "error": "expected JSON"})
+            self.close_connection = True
             return
         try:
             length = int(self.headers.get("Content-Length", ""))
@@ -624,9 +784,14 @@ class FeedbackHandler(BaseHTTPRequestHandler):
 # --- server plumbing ----------------------------------------------------
 
 
-def make_server(host: str, port: int, out_dir: Path) -> ThreadingHTTPServer:
+def make_server(
+    host: str, port: int, out_dir: Path, extra_hosts: str | None = None
+) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), FeedbackHandler)
     server.out_dir = out_dir  # type: ignore[attr-defined]
+    if extra_hosts is None:
+        extra_hosts = os.environ.get("PI_PULSE_FEEDBACK_ALLOWED_HOSTS")
+    server.allowed_hosts = allowed_origin_hosts(host, extra_hosts)  # type: ignore[attr-defined]
     return server
 
 
@@ -646,14 +811,18 @@ def main() -> int:
     args = ap.parse_args()
 
     host = args.host
+    extra_hosts = os.environ.get("PI_PULSE_FEEDBACK_ALLOWED_HOSTS", "")
     if host == "tailscale":
         host = resolve_tailscale_ip()
+        dns_name = resolve_tailscale_dns_name()
+        if dns_name:
+            extra_hosts = f"{extra_hosts},{dns_name}" if extra_hosts else dns_name
     out_dir = args.out_dir.resolve()
     if not out_dir.is_dir():
         print(f"ERROR: out dir does not exist: {out_dir}", file=sys.stderr)
         return 1
 
-    server = make_server(host, args.port, out_dir)
+    server = make_server(host, args.port, out_dir, extra_hosts=extra_hosts or None)
     print(
         f"pi-pulse feedback server: http://{host}:{args.port}/ (out dir: {out_dir})",
         file=sys.stderr,

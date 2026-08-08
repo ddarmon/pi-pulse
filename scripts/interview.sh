@@ -23,13 +23,12 @@
 # ~/.pi/agent/sessions/ so they do not feed tomorrow's distill via sesh).
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
 
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
@@ -71,7 +70,7 @@ echo
 # is silently dropped by the ollama OpenAI-compat provider path --- the
 # string never enters the /v1/chat/completions payload (verified by token
 # accounting 2026-07-05). Do not switch back.
-pi --provider "$PI_PROVIDER" --model "$PI_MODEL" \
+env -u BRAVE_API_KEY pi --provider "$PI_PROVIDER" --model "$PI_MODEL" \
    --no-skills \
    --session-dir "$SESSION_DIR" \
    @"$PROMPT" \

@@ -4,6 +4,7 @@
 # to Documents once, rather than granting Full Disk Access to bash or Python.
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 REPO="$PWD"

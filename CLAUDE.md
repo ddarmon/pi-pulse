@@ -14,12 +14,14 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     `.tmp/{chats,sesh,anki_signals}_recent.md`.
     `sources/build_recent_pulses.py` writes `.tmp/recent_pulses.md`
     (scout and plan both read it).
-2.  **distill** -- `pi -p prompts/distill_context.md --no-skills` reads
+2.  **distill** -- `pi -p prompts/distill_context.md --no-tools
+    --no-context-files --no-extensions --no-skills` reads
     the three input bundles plus `memory/interests.md` and produces a
     five-section memo at `.tmp/interests_today.md` (Active threads, Open
     questions, Persistent interests, Study reinforcement, Avoid).
-3.  **scout** -- `pi -p prompts/scout_signals.md` runs broad
-    `brave-search` queries per interest cluster (memo bullets +
+3.  **scout** -- `pi -p prompts/scout_signals.md` runs with no built-in
+    tools and only the in-repo `search`/`fetch` broker extension. It probes
+    Brave Search per interest cluster (redacted memo bullets +
     durable-profile candidates from `interests.md`) and writes a
     structured signal sheet at `.tmp/signals_raw.md`: one entry per
     fresh primary source with `url`, `published`, `source_class`,
@@ -35,7 +37,8 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     writes the surviving pool to `.tmp/signals.md`. The scout prompt
     still receives the seen ledger so the model doesn't waste query
     budget, but ledger enforcement lives in code.
-4.  **plan** -- `pi -p prompts/compose_plan.md --no-skills` ranks
+4.  **plan** -- `pi -p prompts/compose_plan.md --no-tools
+    --no-context-files --no-extensions --no-skills` ranks
     scout signals into card slots. Each slot's `Source URL:` is
     copied verbatim from `.tmp/signals.md` -- plan never invents URLs
     or topics. `PI_PULSE_CARDS_{TRACKED,ADJACENT,BRIDGE,FOLLOWUP}` are
@@ -55,12 +58,10 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     `logs/${RUN_ID}/dropped.md`. `sources/expand_slot.sh`
     is invoked once per slot via `xargs -P
     $PI_PULSE_EXPAND_PARALLEL` (default 4). Each per-slot
-    `pi -p prompts/compose_expand.md` fetches the committed Source URL
-    via `brave-search` `content.js` (one fetch budgeted; one fallback
-    `search.js` allowed only if the fetch 404s), then writes 250--400
-    words of prose to `.tmp/expand/NN/body.md`. The built-in
-    `web_search`/`web_fetch` tools are forbidden -- their results are
-    unbounded and have overflowed context before. Drops are reported
+    guard fetches the manifest's committed Source URL before Pi starts
+    (one bounded fetch; one bounded search fallback on failure). The
+    resulting `page.md` is attached to a sealed no-tools expand call,
+    which writes 250--400 words to `.tmp/expand/NN/body.md`. Drops are reported
     on stderr (`DROPPED slot=NN reason=...`) and aggregated into
     `logs/${RUN_ID}/dropped.md` -- never into the delivered brief.
 6.  **deliver** -- stitch `.tmp/expand/theme.md` (lifted from plan)
@@ -74,7 +75,8 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     means a systemic failure rather than bad URLs); render
     `out/${RUN_ID}.html` from the
     markdown via `sources/render_html.py` (pandoc preferred, Python
-    `markdown` fallback, MathJax loaded only when math is detected);
+    `markdown` fallback, output-tree allowlist sanitizer, pinned local
+    MathJax loaded only when math is detected);
     write an editable feedback companion file at
     `out/${RUN_ID}.feedback.md` via
     `sources/build_feedback_template.py` (one numbered line per
@@ -237,10 +239,9 @@ it persistently. Security model: the tailnet is the auth boundary;
 defense-in-depth is a client-IP allowlist (loopback + `100.64.0.0/10`
 + Tailscale IPv6 ULA -- everything else 403s even if misbound),
 strict `RUN_ID` regex on every path construction, a 16 KB POST cap,
-and no static file serving. The brief pages are intentionally served
-WITHOUT a CSP: `render_html.py` output uses inline scripts and CDN
-MathJax, and a strict CSP would break math rendering -- don't "harden"
-this without checking that. The server only ever writes
+an exact same-origin check plus JSON content-type gate on rating POSTs,
+and a nonce-based CSP on brief pages. Only pinned local MathJax assets
+are served from a fixed asset route. The server only ever writes
 `out/*.feedback.md`; ingest sweeps them on the next run as usual.
 
 **Deployment state (this machine):** the server is INSTALLED and
@@ -308,6 +309,10 @@ There is no cron yet -- run it weekly when convenient.
     detail. `expand.log.md` concatenates per-slot session digests.
 -   `logs/${RUN_ID}/dropped.md` -- which expand slots dropped and why
     (empty `(none)` on a clean run).
+-   `logs/${RUN_ID}/egress.log` -- append-only JSONL of every guarded
+    outbound attempt; `egress.md` is the post-run invariant/provenance audit.
+-   `logs/${RUN_ID}/capabilities.jsonl` -- prompt-free evidence of provider,
+    model, and security flags extracted from each exact Pi invocation.
 -   `logs/${RUN_ID}/*.err` -- raw stderr from each subprocess.
 -   `.pulse-sessions/${RUN_ID}/{distill,scout,plan,expand}/` -- full
     pi session JSONLs. Parse with `sources/inspect_session.py`. Expand
@@ -322,18 +327,21 @@ There is no cron yet -- run it weekly when convenient.
     output *after `PI_PULSE_SYNTH_RETRIES` attempts* (default 3; each
     stage is wrapped by `run_pi_retry`, which resamples on empty output
     -- see the glm-5.2 thinking-runaway note above), if the ledger
-    filter drops every scout signal, or if every expand slot drops.
+    filter drops every scout signal, if the egress audit fails, or if every
+    expand slot drops.
     Logs are preserved. A retried stage logs
     `<stage>: EMPTY output on attempt N/M ...` / `recovered on attempt N`.
 
 ## Known constraints
 
 -   `kimi-k2.6:cloud` context is 262k tokens. The built-in `web_search`
-    tool returns unbounded results (one call was observed at 1.1M
-    chars), which is why `compose_expand.md` mandates the `brave-search`
-    skill instead: its `search.js` and `content.js` return size-bounded
-    markdown. Do not reintroduce `web_search`/`web_fetch` without a
-    size-bounding plan.
+    tool once returned 1.1M chars, and the former external `content.js`
+    downloaded full responses before parsing. Neither is used now: the
+    in-repo broker caps queries and streams response bytes under a hard
+    limit before content enters model context.
+-   Full run history is preserved by default. `PI_PULSE_RETENTION_DAYS=0`
+    disables pruning; setting a positive value opts into deletion of only
+    date-shaped children under `logs/` and `.pulse-sessions/`.
 -   `sesh` requires a built index. `collect_sesh.py` runs `sesh refresh`
     before `sesh sessions` (idempotent, \~5s). Removing that call will
     silently break `pulse.sh` under `set -e`.

@@ -10,14 +10,15 @@ memory/unfetchable_urls.jsonl, which sources/filter_signals.py reads
 on the next run -- so a URL that 403'd today is not re-scouted and
 re-dropped tomorrow.
 
-Only model-emitted drops are recorded: per compose_expand.md the model
-emits a DROPPED line exactly when both the content.js fetch and the
-fallback search failed, i.e. the *source* is the problem. Script-level
-failures are skipped because they say nothing about the URL:
-`pi-exit-nonzero` (transient pi crash, injected by expand_slot.sh) and
-malformed bodies with no DROPPED line (model misbehavior). URLs
-already in the ledger are skipped so retries don't accumulate
-duplicates.
+Recorded drops are the ones that indict the *source*: the model's own
+DROPPED line (per compose_expand.md, emitted when the attached page is
+empty or substanceless) and expand_slot.sh's `fetch-failed` (both the
+guard fetch and the fallback search failed). Drop reasons that say
+nothing about the URL are skipped: `pi-exit-nonzero` (transient pi
+crash), `no-committed-url` (manifest bookkeeping failure),
+`capability-log-failed` (local logging failure), and malformed bodies
+with no DROPPED line (model misbehavior). URLs already in the ledger
+are skipped so retries don't accumulate duplicates.
 
 URLs are normalized with append_seen.normalize so the ledger agrees
 with the seen ledger and the filter.
@@ -38,7 +39,7 @@ from append_seen import normalize
 DROPPED_RE = re.compile(r"DROPPED slot=\S+ reason=(.+)")
 SOURCE_URL_RE = re.compile(r"^\s*-\s*\*\*Source URL:\*\*\s*(\S+)\s*$")
 RUN_ID_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
-SKIP_REASONS = ("pi-exit-nonzero",)
+SKIP_REASONS = ("pi-exit-nonzero", "no-committed-url", "capability-log-failed")
 
 
 def drop_reason(slot_dir: Path) -> str | None:

@@ -30,6 +30,8 @@ import sys
 from pathlib import Path
 
 from append_seen import normalize
+from privacy import find_private_markers
+from url_policy import UrlPolicyError, validate_public_url
 
 SIGNAL_RE = re.compile(r"^## Signal\s+(\S+)\s*$")
 URL_RE = re.compile(r"^\s*-\s*url:\s*(\S+)\s*$")
@@ -55,6 +57,10 @@ def load_ledger(path: Path) -> set[str]:
             continue
         url = entry.get("url")
         if url:
+            try:
+                validate_public_url(url)
+            except UrlPolicyError:
+                continue
             urls.add(normalize(url))
     return urls
 
@@ -125,17 +131,31 @@ def main() -> int:
             reason = "missing-url"
             url = ""
         else:
-            url = normalize(raw_url)
-            if url in seen:
-                reason = "seen-url"
-            elif url in unfetchable:
-                reason = "unfetchable-url"
-            elif url in in_sheet:
-                reason = "duplicate-in-sheet"
+            private_markers = find_private_markers(raw_url)
+            if private_markers:
+                url = ""
+                reason = f"private-url:{','.join(private_markers)}"
+            else:
+                try:
+                    validate_public_url(raw_url)
+                except UrlPolicyError as exc:
+                    url = ""
+                    reason = f"invalid-url:{exc}"
+                else:
+                    url = normalize(raw_url)
+                    if url in seen:
+                        reason = "seen-url"
+                    elif url in unfetchable:
+                        reason = "unfetchable-url"
+                    elif url in in_sheet:
+                        reason = "duplicate-in-sheet"
         if reason:
             drops += 1
+            logged_url = raw_url or "(none)"
+            if reason.startswith(("private-url:", "invalid-url:")):
+                logged_url = "(redacted-invalid-url)"
             print(
-                f"FILTERED signal={signal_id} reason={reason} url={raw_url or '(none)'}",
+                f"FILTERED signal={signal_id} reason={reason} url={logged_url}",
                 file=sys.stderr,
             )
             continue

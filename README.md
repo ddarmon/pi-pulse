@@ -11,16 +11,16 @@ Each morning the pipeline:
     `YYYY/MM/DD/*.md` tree -- e.g. an Obsidian vault), the last 7 days
     of [`sesh`](https://github.com/ddarmon/sesh) coding sessions, and
     three Anki signals (recent reviews, recent additions, leeches).
-2.  **Distills** them into a memo of active threads, open questions,
-    persistent interests, and study-reinforcement topics via a single Pi
-    call with `--no-skills`.
-3.  **Plans** the day's brief: a second Pi call (also no tools) picks
-    exactly N tracked + M adjacent + O bridge topics from the memo, per
-    env-var quotas.
-4.  **Expands** each planned topic into a mini-essay card (250--400
-    words of prose) via a third Pi call with web search enabled,
-    budgeted at one search + one fetch per card.
-5.  **Delivers** the brief to `out/YYYY-MM-DD.md` and, if configured, to
+2.  **Distills** them into an interest memo via a sealed, no-tools Pi call.
+3.  **Scouts** primary sources through an in-repo broker exposing only
+    bounded, logged `search` and `fetch` tools; private network targets are
+    refused.
+4.  **Plans** the day's brief in a second sealed Pi call, committing every
+    card to a URL from the scout sheet.
+5.  **Expands** each planned topic into a 250--400 word mini-essay after the
+    committed URL is fetched deterministically; expand itself has no tools.
+6.  **Delivers** sanitized HTML and Markdown to `out/YYYY-MM-DD-HHMM.*`
+    and, if configured, to
     a separate delivery directory (e.g. your Obsidian vault).
 
 ## Layout
@@ -52,9 +52,9 @@ launchd/                    com.user.pi-pulse.plist.template
     configured under an `ollama` provider in `~/.pi/agent/models.json`,
     but anything Pi understands works. Set `PI_PROVIDER` / `PI_MODEL` to
     override.
--   A web-search-capable tool available to Pi. The compose stage relies
-    on it. The author uses `@ollama/pi-web-search`
-    (`pi install npm:@ollama/pi-web-search`).
+-   Node.js 20+ for the dependency-free guarded Brave Search broker.
+-   A Brave Search API key stored as `BRAVE_API_KEY` in `.env`. The broker
+    reads it directly; model processes do not inherit it.
 -   [`sesh`](https://github.com/ddarmon/sesh) on `$PATH` for the coding
     session collector.
 -   [Anki](https://apps.ankiweb.net/) desktop with the
@@ -95,8 +95,12 @@ before each interview, and a diff is printed on exit.
 
 The brief lands at:
 
--   `out/YYYY-MM-DD.md` (always)
--   `$PI_PULSE_DELIVERY/YYYY-MM-DD.md` (if `PI_PULSE_DELIVERY` is set)
+-   `out/YYYY-MM-DD-HHMM.md` (always)
+-   `$PI_PULSE_DELIVERY/YYYY-MM-DD-HHMM.md` (if `PI_PULSE_DELIVERY` is set)
+
+Full logs and Pi session history are preserved by default. Retention is
+strictly opt-in: set `PI_PULSE_RETENTION_DAYS` to a positive number only if
+you want old date-stamped private run artifacts pruned; `0` keeps everything.
 
 ## Schedule daily at 05:30 (macOS launchd)
 
@@ -133,6 +137,9 @@ files the nightly ingest sweeps. Intended deployment is a private
 [Tailscale](https://tailscale.com) network: the tailnet provides
 transport security and authentication, and the server refuses any
 client that is not loopback or a Tailscale address even if misbound.
+Rating writes additionally require same-origin JSON requests. Briefs run
+under a nonce-based CSP, and math uses the integrity-checked local MathJax
+build in `vendor/mathjax/` rather than a CDN.
 
 ```bash
 # In .env: bind the machine's Tailscale IP (autodetected via the
@@ -194,9 +201,11 @@ again.
 -   **Ollama not reachable.** `pulse.sh` falls back to `ollama serve` in
     the background, but on a cold boot the first `pi` call may time out.
     Re-run.
--   **Web search returns nothing.** Confirm the web search package is
-    installed (`pi list` for `@ollama/pi-web-search`) and that any API
-    key it needs is set.
+-   **Web search returns nothing.** Confirm `BRAVE_API_KEY` is present in
+    `.env`, then inspect `logs/<RUN_ID>/egress.log` and `scout.err`.
+-   **Security audit refuses delivery.** Inspect `logs/<RUN_ID>/egress.md`.
+    `capabilities.jsonl` records only Pi provider/model and security flags
+    from the exact invocations; it never records prompt text or credentials.
 -   **Brief is generic.** The distill memo is probably vague. Inspect
     `.tmp/interests_today.md` before tuning the compose prompt -- if it
     says "model architectures" instead of "Sourdough cold-retard at 70% hydration",

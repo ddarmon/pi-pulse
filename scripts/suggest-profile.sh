@@ -16,13 +16,12 @@
 # they do not feed tomorrow's distill via sesh).
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
 
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
@@ -68,10 +67,10 @@ PROMPT=$(sed -e "s|{{DAYS}}|${DAYS}|g" "$PROMPT_FILE")
 think_args=()
 [[ -n "$THINKING" ]] && think_args=(--thinking "$THINKING")
 echo "[suggest] launching pi (${PI_PROVIDER}/${SUGGEST_MODEL}${THINKING:+, thinking=$THINKING})"
-pi -p "$PROMPT" \
+env -u BRAVE_API_KEY pi -p "$PROMPT" \
    --provider "$PI_PROVIDER" --model "$SUGGEST_MODEL" \
    ${think_args[@]+"${think_args[@]}"} \
-   --no-skills \
+   --no-tools --no-context-files --no-extensions --no-skills \
    --session-dir "$SESSION_DIR" \
    @"$PROFILE" @.tmp/suggest_input.md \
    > "$OUT"

@@ -16,13 +16,12 @@
 # Makes zero model calls.
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
 
 if uv run sources/review_feedback.py "$@"; then
