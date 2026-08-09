@@ -533,6 +533,44 @@ split_dropped=$(grep -c '^DROPPED ' "$LOG_DIR/split-plan.err" || true)
 } > "$LOG_DIR/dropped.md"
 log "expand drops: ${dropped_count}/${SLOT_COUNT} (split-stage drops: ${split_dropped:-0})"
 
+# 5d. Grounding census. A slot whose primary fetch failed still produces a
+# card from the search-snippet fallback: no drop, no error, but the prose
+# rests on a few snippet lines instead of the committed source. Surface it,
+# because "source-first" silently stops holding otherwise.
+grounding_fetch=0
+grounding_fallback=0
+fallback_slots=""
+while IFS=$'\t' read -r slot_id _slot_tag slot_url; do
+  body=".tmp/expand/$slot_id/body.md"
+  # Only delivered cards matter; dropped slots are already reported above.
+  [[ -s "$body" ]] && [[ "$(head -c 3 "$body" 2>/dev/null)" == "## " ]] \
+    && ! grep -q 'DROPPED slot=' "$body" || continue
+  if [[ "$(cat ".tmp/expand/$slot_id/grounding" 2>/dev/null)" == "search-fallback" ]]; then
+    grounding_fallback=$((grounding_fallback + 1))
+    fallback_slots+="- slot=$slot_id url=${slot_url}"$'\n'
+  else
+    grounding_fetch=$((grounding_fetch + 1))
+  fi
+done < "$MANIFEST_FILE"
+{
+  echo "# Grounding ${RUN_ID}"
+  echo
+  echo "- delivered cards from the committed primary source: ${grounding_fetch}"
+  echo "- delivered cards from the search-snippet fallback: ${grounding_fallback}"
+  if [[ -n "$fallback_slots" ]]; then
+    echo
+    echo "## Snippet-grounded cards"
+    echo
+    printf '%s' "$fallback_slots"
+  fi
+} > "$LOG_DIR/grounding.md"
+if [[ "$grounding_fallback" -gt 0 ]]; then
+  log "WARN: ${grounding_fallback}/$((grounding_fetch + grounding_fallback)) delivered cards are snippet-grounded, not source-grounded"
+  log "      See $LOG_DIR/grounding.md"
+else
+  log "grounding: all ${grounding_fetch} delivered cards from the committed primary source"
+fi
+
 # Reproduce the security audit mechanically on every run. The report records
 # code/prompt versions, actual session tool calls, and every guarded outbound
 # attempt. A violation fails closed before URL ledgers or delivery are changed,
@@ -560,6 +598,7 @@ fi
   echo "- signals: raw=${signals_raw} kept=${signals_kept} (ledger filter)"
   echo "- feedback digest: ${fb_census}"
   echo "- expand: slots=${SLOT_COUNT} parallel=${EXPAND_PARALLEL} drops=${dropped_count}"
+  echo "- grounding: ${grounding_fetch} from primary source, ${grounding_fallback} from search fallback (\`${LOG_DIR}/grounding.md\`)"
   echo "- security audit: ${audit_status} (\`${LOG_DIR}/egress.md\`)"
   echo
   [[ -f "$LOG_DIR/distill.log.md" ]] && cat "$LOG_DIR/distill.log.md"

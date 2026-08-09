@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
+import { deflateSync } from "node:zlib";
 
 import {
   braveSearch,
@@ -93,6 +94,73 @@ test("HTML extraction drops scripts and retains substantive prose", () => {
   assert.match(output, /^# Example/);
   assert.match(output, /substantive public article/);
   assert.doesNotMatch(output, /steal/);
+});
+
+// Builds a minimal one-page PDF whose content stream is deflate-compressed,
+// the same shape the real academic sources use.
+function buildPdf(operators, { filter = "/FlateDecode", compress = true } = {}) {
+  const body = compress ? deflateSync(Buffer.from(operators, "latin1")) : Buffer.from(operators, "latin1");
+  return Buffer.concat([
+    Buffer.from(`%PDF-1.5\n1 0 obj\n<< /Length ${body.length} ${filter ? `/Filter ${filter}` : ""} >>\nstream\n`, "latin1"),
+    body,
+    Buffer.from("\nendstream\nendobj\n%%EOF\n", "latin1"),
+  ]);
+}
+
+const PDF_PROSE = "Distributed rate limiting converges to a fair allocation under skewed flows. ".repeat(6);
+
+test("PDF text is recovered from compressed content streams", () => {
+  // TJ kerns, not spaces, separate the words -- as LaTeX emits them.
+  const kerned = "BT /F1 11 Tf [(Distributed) -300 (rate) -300 (limiter)] TJ ET";
+  const pdf = buildPdf(`BT /F1 11 Tf (${PDF_PROSE}) Tj ET ${kerned}`);
+  const output = extractReadable(pdf, "application/pdf");
+  assert.match(output, /Distributed rate limiting converges/);
+  // The kern-to-space heuristic must not run words together.
+  assert.match(output, /Distributed rate limiter/);
+});
+
+test("PDF ligatures are expanded from both escapes and raw bytes", () => {
+  const filler = "and this sentence exists only to clear the substantive-text floor. ".repeat(4);
+  const pdf = buildPdf(`BT /F1 11 Tf (Classi\\014cation of \x0dexible ffi models. ${filler}) Tj ET`);
+  const output = extractReadable(pdf, "application/pdf");
+  assert.match(output, /Classification/);
+  assert.match(output, /flexible/);
+  assert.doesNotMatch(output, /[\x0b-\x0f]/);
+});
+
+test("declared PDF without the %PDF- header is refused, not parsed", () => {
+  const notPdf = Buffer.from("GIF89a" + "\u0000".repeat(400), "latin1");
+  assert.throws(() => extractReadable(notPdf, "application/pdf"), /does not begin with %PDF-/);
+});
+
+test("image-only PDF is refused as having no text layer", () => {
+  // A /Image stream is skipped, so nothing substantive is extracted.
+  const pdf = buildPdf("\u0000\u0001\u0002".repeat(400), { filter: "/DCTDecode" });
+  assert.throws(() => extractReadable(pdf, "application/pdf"), /no extractable text layer/);
+});
+
+test("binary streams that inflate do not leak noise into extracted text", () => {
+  // High-byte payload containing PDF-string-literal shapes; the per-stream
+  // text gate must discard it rather than mining "(...)" out of binary.
+  let noise = "";
+  for (let i = 0; i < 3000; i += 1) noise += String.fromCharCode(128 + (i % 127));
+  const pdf = buildPdf(`BT /F1 11 Tf (${PDF_PROSE}) Tj ET`) ;
+  const withNoise = Buffer.concat([
+    pdf,
+    Buffer.from("1 0 obj\n<< >>\nstream\n", "latin1"),
+    deflateSync(Buffer.from(`((${noise}) Tj`, "latin1")),
+    Buffer.from("\nendstream\n", "latin1"),
+  ]);
+  const output = extractReadable(withNoise, "application/pdf");
+  assert.match(output, /Distributed rate limiting converges/);
+  // No high-byte garbage survived into model context.
+  assert.ok(!/[\u0080-\u00ff]{8}/.test(output), "binary noise leaked into extracted text");
+});
+
+test("a PDF decompression bomb is capped instead of exhausting memory", () => {
+  const bomb = buildPdf("A".repeat(40 * 1024 * 1024));
+  // Must return control quickly and never OOM; no text operators, so refused.
+  assert.throws(() => extractReadable(bomb, "application/pdf"), /no extractable text layer/);
 });
 
 test("search query length fails before any network request", async () => {

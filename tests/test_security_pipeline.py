@@ -243,8 +243,21 @@ class PipelineFlagTests(unittest.TestCase):
 
     def test_all_manifest_readers_take_three_fields(self) -> None:
         readers = [line for line in self.pulse.splitlines() if "read -r slot_id" in line]
-        self.assertEqual(len(readers), 3)
-        self.assertTrue(all("_slot_url" in line for line in readers))
+        # session digests, brief stitch, drop aggregation, grounding census
+        self.assertEqual(len(readers), 4)
+        for line in readers:
+            # Every reader must name all three columns, so a short read can
+            # never fold the committed URL into the tag field.
+            names = line.split("read -r", 1)[1].split(";", 1)[0].split()
+            self.assertEqual(len(names), 3, line)
+
+    def test_snippet_fallback_grounding_is_recorded_and_reported(self) -> None:
+        # A fallback card is a real quality degradation that produces no drop,
+        # so the run record must state it rather than let it pass unnoticed.
+        self.assertIn('echo "search-fallback" > "$slot_dir/grounding"', self.expand)
+        self.assertIn('echo "fetch" > "$slot_dir/grounding"', self.expand)
+        self.assertIn('grounding.md', self.pulse)
+        self.assertIn("- grounding:", self.pulse)
 
     def test_retention_is_opt_in(self) -> None:
         self.assertIn('RETENTION_DAYS="${PI_PULSE_RETENTION_DAYS:-0}"', self.pulse)

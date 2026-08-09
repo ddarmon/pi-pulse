@@ -6,6 +6,8 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { extractPdfText, looksLikePdf } from "./pdf.js";
+
 export const MAX_QUERY_CHARS = 256;
 export const MAX_URL_QUERY_CHARS = 512;
 export const MAX_URL_CHARS = 2048;
@@ -390,6 +392,23 @@ function decodeEntities(text) {
 }
 
 export function extractReadable(body, contentType = "text/html") {
+  // PDFs must be handled before any text decoding: the prose lives in
+  // compressed content streams, so the response bytes carry none of it.
+  if (/pdf/i.test(contentType)) {
+    // The content-type allowlist admits declared PDFs only; require the
+    // magic bytes too, so a mislabeled binary is refused rather than parsed.
+    if (!looksLikePdf(body)) {
+      throw new GuardError("declared PDF does not begin with %PDF-", "content-type");
+    }
+    const extracted = extractPdfText(body);
+    const substantivePdf = extracted.replace(/[^\p{L}\p{N}]+/gu, "");
+    if (substantivePdf.length < 200) {
+      // Scanned/image-only PDFs land here: no text layer to summarize.
+      throw new GuardError("PDF has no extractable text layer", "empty-content");
+    }
+    return extracted.slice(0, MAX_PAGE_CHARS);
+  }
+
   const decoded = new TextDecoder("utf-8", { fatal: false }).decode(body);
   if (!/html|xml/i.test(contentType)) {
     const plain = decoded.replace(/\u0000/g, "").trim();
@@ -429,12 +448,15 @@ export async function fetchPage(rawUrl, options = {}) {
     kind: options.kind || "fetch",
     headers: {
       "User-Agent": "pi-pulse-fetch/1.0",
-      Accept: "text/html,application/xhtml+xml,text/plain,text/markdown,application/xml;q=0.8,*/*;q=0.1",
+      Accept: "text/html,application/xhtml+xml,text/plain,text/markdown,application/pdf;q=0.9,application/xml;q=0.8,*/*;q=0.1",
       ...(options.headers || {}),
     },
   });
   const contentType = String(result.headers["content-type"] || "").split(";", 1)[0].trim().toLowerCase();
-  if (contentType && !/(?:html|xml|json|text|markdown)/.test(contentType)) {
+  // `pdf` admits application/pdf and application/x-pdf; extractReadable
+  // additionally requires the %PDF- header before parsing anything.
+  // Undeclared binaries (application/octet-stream) stay refused.
+  if (contentType && !/(?:html|xml|json|text|markdown|pdf)/.test(contentType)) {
     throw new GuardError(`unsupported content type: ${contentType}`, "content-type");
   }
   const readable = extractReadable(result.body, contentType || "text/html");

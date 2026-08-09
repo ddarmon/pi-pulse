@@ -74,6 +74,16 @@ if [[ ! -s "$slot_dir/page.md" ]] || { (( used_fallback )) \
   exit 0
 fi
 
+# Record how this card is grounded. A fallback card is written from search
+# snippets rather than the committed primary source, which is a real quality
+# degradation that produces no drop and is otherwise invisible in the run
+# record. pulse.sh reports the census so it cannot pass unnoticed.
+if (( used_fallback )); then
+  echo "search-fallback" > "$slot_dir/grounding"
+else
+  echo "fetch" > "$slot_dir/grounding"
+fi
+
 # Resolve expand backend, falling back to the global PI_* for safety.
 provider="${EXPAND_PROVIDER:-${PI_PROVIDER:-ollama}}"
 model="${EXPAND_MODEL:-${PI_MODEL:-kimi-k2.6:cloud}}"

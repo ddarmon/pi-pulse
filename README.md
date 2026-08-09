@@ -19,6 +19,10 @@ Each morning the pipeline:
     card to a URL from the scout sheet.
 5.  **Expands** each planned topic into a 250--400 word mini-essay after the
     committed URL is fetched deterministically; expand itself has no tools.
+    PDF sources (lecture notes, preprints, working papers) have their text
+    extracted with Node's builtin `zlib`. If a fetch fails, the card falls
+    back to search snippets and the run reports it in
+    `logs/<RUN_ID>/grounding.md`.
 6.  **Delivers** sanitized HTML and Markdown to `out/YYYY-MM-DD-HHMM.*`
     and, if configured, to
     a separate delivery directory (e.g. your Obsidian vault).

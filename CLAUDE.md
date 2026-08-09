@@ -322,6 +322,10 @@ There is no cron yet -- run it weekly when convenient.
     detail. `expand.log.md` concatenates per-slot session digests.
 -   `logs/${RUN_ID}/dropped.md` -- which expand slots dropped and why
     (empty `(none)` on a clean run).
+-   `logs/${RUN_ID}/grounding.md` -- how many delivered cards came from the
+    committed primary source vs the search-snippet fallback, naming each
+    snippet-grounded slot. A fallback card never appears in `dropped.md`,
+    so this is the only place that degradation is visible.
 -   `logs/${RUN_ID}/egress.log` -- append-only JSONL of every guarded
     outbound attempt; `egress.md` is the post-run invariant/provenance audit.
 -   `logs/${RUN_ID}/capabilities.jsonl` -- prompt-free evidence of provider,
@@ -352,6 +356,29 @@ There is no cron yet -- run it weekly when convenient.
     downloaded full responses before parsing. Neither is used now: the
     in-repo broker caps queries and streams response bytes under a hard
     limit before content enters model context.
+-   **PDF sources are extracted, not fetched as text.** The broker's
+    content-type allowlist admits `application/pdf` and
+    `sources/brave-guard/pdf.js` recovers the text with Node's builtin
+    `zlib` (no dependency): an academic PDF's prose lives in
+    FlateDecode-compressed content streams, so the response bytes carry
+    none of it and there is nothing a model could summarize from them.
+    Inflates are capped per stream and per document (decompression
+    bombs), the scanner is a single linear pass (an early regex version
+    hung on binary input), and streams whose text is not mostly printable
+    ASCII are dropped so images/fonts cannot leak noise into context.
+    Scanned image-only PDFs are refused as having no text layer and the
+    slot drops, which is correct. CID/Type0 fonts and math glyphs garble.
+    Between 2026-08-08 (`519301b`) and this change the allowlist rejected
+    PDFs outright, so every PDF source silently degraded to a Brave
+    snippet -- the population most affected is foundational/theory
+    material, historically the best-rated cards.
+-   **Snippet-grounded cards are reported, not silent.** When a slot's
+    primary fetch fails, `expand_slot.sh` still writes a card from the
+    search-snippet fallback and records `search-fallback` in
+    `.tmp/expand/NN/grounding`. That is a real quality degradation which
+    produces no drop, so `pulse.sh` writes a census to
+    `logs/${RUN_ID}/grounding.md`, adds a `- grounding:` line to
+    `summary.md`, and logs a WARN naming each snippet-grounded slot.
 -   Full run history is preserved by default. `PI_PULSE_RETENTION_DAYS=0`
     disables pruning; setting a positive value opts into deletion of only
     date-shaped children under `logs/` and `.pulse-sessions/`.
