@@ -262,6 +262,19 @@ launchd job holds the port (EADDRINUSE crash-loop). Logs:
 `~/Library/Logs/pi-pulse/feedback-server.{out,err}.log`. User-facing
 setup steps live in README.md ("Rate cards from your phone").
 
+**Scheduled pulse deployment (this machine):** the daily 05:00 run is
+installed via `scripts/install-pulse-agent.sh` as
+`com.user.pi-pulse`, pointing at the native wrapper
+`~/Applications/Pi Pulse.app` (same TCC pattern as the feedback
+server). The wrapper is required: pointing launchd directly at
+bash/pulse.sh leaves node without Documents consent on a cold start, so
+every expand guard fetch dies with EPERM and the egress audit aborts
+the run. Job stdout/stderr: `~/Library/Logs/pi-pulse/pulse.{out,err}.log`
+(per-run logs stay in `logs/<RUN_ID>/`). The LaunchAgent bakes in the
+installing shell's PATH -- re-run the installer after node/uv/pi path
+changes. `--rebuild-app` recompiles the wrapper, which changes its code
+identity and re-prompts for Documents consent.
+
 ## Profile-suggest (weekly, manual)
 
 A human-gated weekly step that surfaces drift between the durable

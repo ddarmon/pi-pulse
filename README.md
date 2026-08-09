@@ -102,28 +102,33 @@ Full logs and Pi session history are preserved by default. Retention is
 strictly opt-in: set `PI_PULSE_RETENTION_DAYS` to a positive number only if
 you want old date-stamped private run artifacts pruned; `0` keeps everything.
 
-## Schedule daily at 05:30 (macOS launchd)
+## Schedule daily (macOS launchd)
 
 ```bash
-# Substitute the three placeholders ({{REPO}}, {{HOME}}, {{PATH}}) for
-# your paths, then write the result to ~/Library/LaunchAgents/.
-sed -e "s|{{REPO}}|$PWD|g" \
-    -e "s|{{HOME}}|$HOME|g" \
-    -e "s|{{PATH}}|$PATH|g" \
-    launchd/com.user.pi-pulse.plist.template \
-    > ~/Library/LaunchAgents/com.user.pi-pulse.plist
-
-launchctl load ~/Library/LaunchAgents/com.user.pi-pulse.plist
+# Builds ~/Applications/Pi Pulse.app (a tiny native wrapper that owns the
+# TCC Documents-folder consent), asks for that consent once via a macOS
+# dialog, and installs the LaunchAgent pointing at the app. Default
+# schedule is 05:00; override with --hour/--minute.
+scripts/install-pulse-agent.sh
 
 # Trigger an immediate run without waiting:
-launchctl kickstart -k gui/$UID/com.user.pi-pulse
+launchctl kickstart gui/$UID/com.user.pi-pulse
 
-# Tail logs:
-tail -f logs/stdout.log logs/stderr.log
+# Tail job logs (per-run detail stays in logs/<RUN_ID>/ in the repo):
+tail -f ~/Library/Logs/pi-pulse/pulse.{out,err}.log
 
 # Disable:
-launchctl unload ~/Library/LaunchAgents/com.user.pi-pulse.plist
+launchctl bootout gui/$UID/com.user.pi-pulse
 ```
+
+The app wrapper matters when the checkout lives under `~/Documents` (or
+another TCC-protected folder): launchd pointed directly at bash gets no
+consent prompt on a cold start, node's guard fetches fail with `EPERM`,
+and the run aborts at the egress audit. The wrapper is the stable TCC
+identity; every stage child (bash, python, node, pi) runs beneath it.
+Re-run the installer after toolchain PATH changes (e.g. a new node
+version); add `--rebuild-app` only if the wrapper source changed, since
+recompiling changes its code identity and re-prompts for consent.
 
 On Linux, write a systemd timer with `Persistent=true` against
 `pulse.sh` instead; the script itself has no macOS-specific dependencies
