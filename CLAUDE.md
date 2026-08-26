@@ -141,15 +141,44 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
         which makes it **stall-proof by construction** (no reasoning channel
         to run away in) and, in a live test (2026-06-28), also *faster* with
         an equal-or-fuller signal sheet. This REQUIRES a `thinkingLevelMap`
-        on the `glm-5.2:cloud` entry in `~/.pi/agent/models.json`:
-        `{"off":"none","low":"low","medium":"medium","high":"high","xhigh":"max"}`.
+        on the `glm-5.2:cloud` entry, which now lives in the **repo-owned**
+        catalog `pi-agent/models.json.template` (see below), not in
+        `~/.pi/agent/models.json`.
         Without it, pi's bare `--thinking off` **omits** the field over the
         OpenAI-compat endpoint and the model still thinks (it does NOT
-        disable). With it, pi sends `reasoning_effort=none`.
+        disable). With it, pi sends `reasoning_effort=none`. Measured
+        2026-08-26 on identical prompts: with the map, 0 chars of thinking;
+        without it, 226. `--thinking low` still thinks (231 chars), so the
+        map is a real switch, not blanket suppression.
     2.  **distill/plan keep thinking on** (ranking/synthesis benefit from it)
         but are wrapped by `run_pi_retry` in `pulse.sh`, which resamples on
         0-byte output up to `PI_PULSE_SYNTH_RETRIES` (default 3). scout is
         wrapped too as belt-and-suspenders.
+-   **The Pi model catalog is repo-owned.** `pulse.sh` and
+    `scripts/suggest-profile.sh` render `pi-agent/models.json.template`
+    (double-brace `{{OLLAMA_BASE_URL}}`, from `PI_PULSE_OLLAMA_BASE_URL`)
+    into the gitignored `.pi-agent/` and export
+    `PI_CODING_AGENT_DIR` so pi reads that catalog instead of
+    `~/.pi/agent/models.json`. `auth.json`, `trust.json`, and
+    `settings.json` are symlinked back to the real agent dir --
+    **trust.json is load-bearing**: an untrusted repo makes pi prompt on
+    the first tool call, which once stalled scout ~10h.
+    Why: the machine-global file is rewritten by `ollama launch pi` and
+    `pi update` (twice on 2026-08-26 alone), and a launcher-written entry
+    carries **no `thinkingLevelMap` and no `contextWindow`**. From
+    2026-08-15 to 2026-08-26 there was no `glm-5.2:cloud` entry at all:
+    pi warned `Using custom model id`, passed the id through to Ollama --
+    so runs *worked* -- while `PI_PULSE_SCOUT_THINKING=off` silently did
+    nothing and pi assumed its 128k default against a 1M-token model.
+    `sources/check_models.py` runs before the first pi call (step 0a2)
+    and fails the run if any stage's model is absent, lacks a
+    `contextWindow`, or asks for a thinking level the catalog would drop;
+    stderr lands in `logs/${RUN_ID}/check-models.err`. `contextWindow`
+    values come from Ollama itself
+    (`curl -s $OLLAMA/api/show -d '{"model":"<id>"}'` ->
+    `model_info.*.context_length`); glm-5.2 is 1048576, not the 262144
+    that a stale entry may claim. To try a new model, add it to the
+    template -- editing `~/.pi/agent/models.json` no longer affects a run.
 -   **pi -> Ollama thinking plumbing (gotchas).** pi has no native Ollama
     provider; `ollama` in `models.json` is a user-defined OpenAI-compat
     provider, so pi sends the thinking level as `reasoning_effort` over
@@ -342,7 +371,11 @@ There is no cron yet -- run it weekly when convenient.
 -   `logs/${RUN_ID}/egress.log` -- append-only JSONL of every guarded
     outbound attempt; `egress.md` is the post-run invariant/provenance audit.
 -   `logs/${RUN_ID}/capabilities.jsonl` -- prompt-free evidence of provider,
-    model, and security flags extracted from each exact Pi invocation.
+    model, thinking level, and security flags extracted from each exact Pi
+    invocation.
+-   `logs/${RUN_ID}/check-models.err` -- the preflight catalog verdict. A
+    failure here aborts the run before the first pi call and names exactly
+    which stage/model/thinking level the catalog cannot support.
 -   `logs/${RUN_ID}/*.err` -- raw stderr from each subprocess.
 -   `.pulse-sessions/${RUN_ID}/{distill,scout,plan,expand}/` -- full
     pi session JSONLs. Parse with `sources/inspect_session.py`. Expand

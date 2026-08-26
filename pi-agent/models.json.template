@@ -1,0 +1,70 @@
+{
+  "_comment": [
+    "Repo-owned Pi model catalog. pulse.sh renders this to .pi-agent/models.json",
+    "and points Pi at it with PI_CODING_AGENT_DIR, so the pipeline no longer",
+    "depends on ~/.pi/agent/models.json -- a machine-global file that",
+    "`ollama launch pi` and `pi update` rewrite (twice on 2026-08-26 alone).",
+    "A launcher-written entry carries no thinkingLevelMap, which silently",
+    "disables PI_PULSE_SCOUT_THINKING=off, and no contextWindow, which leaves",
+    "Pi assuming its 128k default against a 1M-token model.",
+    "contextWindow values come from Ollama's own /api/show context_length.",
+    "{{OLLAMA_BASE_URL}} is substituted by pulse.sh from PI_PULSE_OLLAMA_BASE_URL."
+  ],
+  "providers": {
+    "ollama": {
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "baseUrl": "{{OLLAMA_BASE_URL}}",
+      "models": [
+        {
+          "id": "glm-5.2:cloud",
+          "contextWindow": 1048576,
+          "reasoning": true,
+          "input": ["text"],
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "max"
+          }
+        },
+        {
+          "id": "gemma4:31b-cloud",
+          "contextWindow": 262144,
+          "reasoning": false,
+          "input": ["text", "image"]
+        },
+        {
+          "id": "kimi-k2.6:cloud",
+          "contextWindow": 262144,
+          "reasoning": true,
+          "input": ["text", "image"],
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "max"
+          }
+        },
+        {
+          "id": "minimax-m3:cloud",
+          "contextWindow": 524288,
+          "reasoning": true,
+          "input": ["text"],
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "max"
+          }
+        }
+      ]
+    }
+  }
+}

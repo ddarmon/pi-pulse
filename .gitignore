@@ -14,3 +14,5 @@ __pycache__/
 .DS_Store
 .claude
 SCHEDULED_RUNS.md
+.pi-agent/
+

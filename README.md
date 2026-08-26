@@ -52,10 +52,15 @@ launchd/                    com.user.pi-pulse.plist.template
 ## Prerequisites
 
 -   [`pi`](https://github.com/badlogic/pi-mono) installed on `$PATH`.
--   A Pi provider + model. The defaults assume `kimi-k2.6:cloud` is
-    configured under an `ollama` provider in `~/.pi/agent/models.json`,
-    but anything Pi understands works. Set `PI_PROVIDER` / `PI_MODEL` to
-    override.
+-   A Pi provider + model. The defaults assume `glm-5.2:cloud` under an
+    `ollama` provider, described in the repo-owned catalog
+    `pi-agent/models.json.template`. `pulse.sh` renders that template to
+    `.pi-agent/` and points Pi at it via `PI_CODING_AGENT_DIR`, so
+    `ollama launch pi` rewriting `~/.pi/agent/models.json` cannot change
+    how a run behaves. Set `PI_PULSE_OLLAMA_BASE_URL` to your Ollama
+    endpoint; set `PI_PROVIDER` / `PI_MODEL` to change model, and add the
+    model to the template so it keeps its thinking map and context
+    window.
 -   Node.js 20+ for the dependency-free guarded Brave Search broker.
 -   A Brave Search API key stored as `BRAVE_API_KEY` in `.env`. The broker
     reads it directly; model processes do not inherit it.

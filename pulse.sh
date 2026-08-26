@@ -101,9 +101,10 @@ PI_MODEL="${PI_MODEL:-glm-5.2:cloud}"
 # on the global default (today's behavior). The recommended setup is a
 # single model across all stages (e.g. glm-5.2:cloud); the override knobs
 # exist so any stage can be pointed at a different model without touching
-# the others. *_THINKING is empty by default (no --thinking flag passed);
-# it is effectively inert for reasoning models served over Ollama's
-# OpenAI-compat endpoint (pi cannot send a working "off" through it).
+# the others. *_THINKING is empty by default (no --thinking flag passed).
+# A level only reaches the provider when the repo-owned catalog below maps
+# it for that model; check_models.py fails the run if a stage asks for a
+# level the catalog would silently drop.
 DISTILL_PROVIDER="${PI_PULSE_DISTILL_PROVIDER:-$PI_PROVIDER}"
 DISTILL_MODEL="${PI_PULSE_DISTILL_MODEL:-$PI_MODEL}"
 DISTILL_THINKING="${PI_PULSE_DISTILL_THINKING:-}"
@@ -121,6 +122,28 @@ EXPAND_THINKING="${PI_PULSE_EXPAND_THINKING:-}"
 distill_think=(); [[ -n "$DISTILL_THINKING" ]] && distill_think=(--thinking "$DISTILL_THINKING")
 scout_think=();   [[ -n "$SCOUT_THINKING"   ]] && scout_think=(--thinking "$SCOUT_THINKING")
 plan_think=();    [[ -n "$PLAN_THINKING"    ]] && plan_think=(--thinking "$PLAN_THINKING")
+
+# Repo-owned Pi model catalog. ~/.pi/agent/models.json is machine-global
+# and rewritten by `ollama launch pi` / `pi update`; a launcher-written
+# entry carries no thinkingLevelMap and no contextWindow, which silently
+# disabled SCOUT_THINKING=off for twelve days and left Pi assuming a 128k
+# window against a 1M model. Pointing PI_CODING_AGENT_DIR at a directory
+# this repo renders makes the pipeline immune to that file changing.
+# auth.json/trust.json/settings.json are symlinked to the real agent dir,
+# so credentials, project trust (an untrusted repo prompts on the first
+# tool call and stalls the run), and settings behave exactly as before.
+OLLAMA_BASE_URL="${PI_PULSE_OLLAMA_BASE_URL:-http://localhost:11434/v1}"
+PI_AGENT_DIR="$PWD/.pi-agent"
+mkdir -p "$PI_AGENT_DIR"
+sed "s|{{OLLAMA_BASE_URL}}|${OLLAMA_BASE_URL}|g" \
+  pi-agent/models.json.template > "$PI_AGENT_DIR/models.json"
+for shared in auth.json trust.json settings.json; do
+  real="$HOME/.pi/agent/$shared"
+  [[ -e "$real" ]] || continue
+  [[ -L "$PI_AGENT_DIR/$shared" ]] && rm -f "$PI_AGENT_DIR/$shared"
+  ln -sf "$real" "$PI_AGENT_DIR/$shared"
+done
+export PI_CODING_AGENT_DIR="$PI_AGENT_DIR"
 
 # Total attempts for each single-shot synthesis stage (distill/scout/plan).
 # glm-5.2 occasionally ends a synthesis turn inside its reasoning channel and
@@ -219,6 +242,22 @@ if [[ "$needs_ollama" == 1 ]]; then
     sleep 5
   fi
 fi
+
+# 0a2. The catalog must actually describe every model this run uses. An
+# unknown id still runs (Pi passes it through as a custom id) but loses
+# its thinkingLevelMap and contextWindow, so a stage asking for
+# --thinking off silently reasons anyway. Fail before the first Pi call.
+if ! uv run sources/check_models.py "$PI_AGENT_DIR/models.json" \
+     --require distill "$DISTILL_PROVIDER" "$DISTILL_MODEL" "$DISTILL_THINKING" \
+     --require scout "$SCOUT_PROVIDER" "$SCOUT_MODEL" "$SCOUT_THINKING" \
+     --require plan "$PLAN_PROVIDER" "$PLAN_MODEL" "$PLAN_THINKING" \
+     --require expand "$EXPAND_PROVIDER" "$EXPAND_MODEL" "$EXPAND_THINKING" \
+     2>"$LOG_DIR/check-models.err"; then
+  cat "$LOG_DIR/check-models.err" >&2
+  log "ERROR: model catalog check failed; see $LOG_DIR/check-models.err"
+  exit 1
+fi
+log "model catalog: $(basename "$PI_AGENT_DIR")/models.json verified for 4 stages"
 
 # 0b. Ensure Anki is running so AnkiConnect can serve collect_anki.py.
 if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1; then

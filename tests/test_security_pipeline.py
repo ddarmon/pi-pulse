@@ -295,6 +295,83 @@ class SignalFilterTests(unittest.TestCase):
             self.assertNotIn("david@example.com", result.stderr)
 
 
+class ModelCatalogTests(unittest.TestCase):
+    """The catalog is metadata, not a gate: an unknown id still runs.
+
+    Between 2026-08-15 and 2026-08-26 this pipeline ran with no entry for
+    glm-5.2:cloud, so `--thinking off` was omitted rather than sent as
+    `reasoning_effort: none` and scout reasoned on every run. Nothing in
+    the output showed it.
+    """
+
+    GOOD = {
+        "id": "glm-5.2:cloud",
+        "contextWindow": 1048576,
+        "reasoning": True,
+        "thinkingLevelMap": {"off": "none", "minimal": None, "low": "low"},
+    }
+
+    def check(self, models: list[dict], *requires: tuple[str, str, str, str]) -> subprocess.CompletedProcess[str]:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        catalog = Path(temp.name) / "models.json"
+        catalog.write_text(json.dumps({"providers": {"ollama": {"models": models}}}))
+        cmd = [sys.executable, str(REPO / "sources" / "check_models.py"), str(catalog)]
+        for req in requires:
+            cmd += ["--require", *req]
+        return subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, check=False)
+
+    def test_complete_entry_satisfies_the_run(self) -> None:
+        result = self.check([self.GOOD], ("scout", "ollama", "glm-5.2:cloud", "off"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_missing_thinking_map_is_caught(self) -> None:
+        entry = {k: v for k, v in self.GOOD.items() if k != "thinkingLevelMap"}
+        result = self.check([entry], ("scout", "ollama", "glm-5.2:cloud", "off"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no thinkingLevelMap", result.stderr)
+
+    def test_absent_model_is_caught(self) -> None:
+        result = self.check([self.GOOD], ("scout", "ollama", "glm-5.3-flash:cloud", "off"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not in the 'ollama' catalog", result.stderr)
+
+    def test_missing_context_window_is_caught(self) -> None:
+        entry = {k: v for k, v in self.GOOD.items() if k != "contextWindow"}
+        result = self.check([entry], ("distill", "ollama", "glm-5.2:cloud", ""))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("128k default", result.stderr)
+
+    def test_minimal_is_refused_because_the_provider_400s_it(self) -> None:
+        result = self.check([self.GOOD], ("scout", "ollama", "glm-5.2:cloud", "minimal"))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("never safe", result.stderr)
+
+    def test_unrendered_placeholder_is_caught(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        catalog = Path(temp.name) / "models.json"
+        catalog.write_text('{"providers": {"ollama": {"baseUrl": "{{OLLAMA_BASE_URL}}", "models": []}}}')
+        result = subprocess.run(
+            [sys.executable, str(REPO / "sources" / "check_models.py"), str(catalog)],
+            cwd=REPO, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unsubstituted placeholder", result.stderr)
+
+    def test_shipped_template_covers_every_default_stage_model(self) -> None:
+        # The committed template is what pulse.sh renders; if it stops
+        # describing the default model the run fails at preflight.
+        template = (REPO / "pi-agent" / "models.json.template").read_text()
+        catalog = json.loads(template.replace("{{OLLAMA_BASE_URL}}", "http://localhost:11434/v1"))
+        models = {m["id"]: m for m in catalog["providers"]["ollama"]["models"]}
+        self.assertIn("glm-5.2:cloud", models)
+        glm = models["glm-5.2:cloud"]
+        self.assertEqual(glm["thinkingLevelMap"]["off"], "none")
+        self.assertIsNone(glm["thinkingLevelMap"]["minimal"])
+        self.assertGreater(glm["contextWindow"], 262144)
+
+
 class UnfetchableLedgerTests(unittest.TestCase):
     def build_run(self, root: Path, slots: list[tuple[str, str, str, str]]) -> Path:
         """Write an expand scratch dir. Each slot is (id, url, grounding, body)."""

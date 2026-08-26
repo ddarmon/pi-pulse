@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-VALUE_FLAGS = {"--extension", "--model", "--provider", "--skill", "--tools"}
+VALUE_FLAGS = {"--extension", "--model", "--provider", "--skill", "--thinking", "--tools"}
 
 
 def parse_pi_command(command: list[str]) -> dict:
@@ -47,6 +47,10 @@ def parse_pi_command(command: list[str]) -> dict:
         "skills": values["--skill"],
         "provider": values["--provider"][-1] if values["--provider"] else None,
         "model": values["--model"][-1] if values["--model"] else None,
+        # Recorded so a stage that asks for a thinking level the catalog
+        # would silently drop is visible in the run record, not only in
+        # the preflight that gates it.
+        "thinking": values["--thinking"][-1] if values["--thinking"] else None,
     }
 
 
