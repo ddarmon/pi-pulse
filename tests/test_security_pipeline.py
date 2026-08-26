@@ -78,6 +78,10 @@ class UrlPolicyTests(unittest.TestCase):
             "https://example.com:8443/",
             "https://<domain",
             "https://example.com/?q=" + "x" * 513,
+            # A doubled scheme parses as the single-label host `https`; a
+            # live run committed one and degraded to a search snippet.
+            "https://https://arxiv.org/html/2512.16959v1",
+            "https://intranet/paper",
         )
         for value in bad:
             with self.subTest(value=value), self.assertRaises(url_policy.UrlPolicyError):
@@ -187,6 +191,80 @@ class SplitPlanManifestTests(unittest.TestCase):
 
 
 class SignalFilterTests(unittest.TestCase):
+    def run_filter(self, root: Path, sheet: str, ledger: list[dict]) -> subprocess.CompletedProcess[str]:
+        signals = root / "signals.md"
+        signals.write_text(sheet)
+        unfetchable = root / "unfetchable.jsonl"
+        unfetchable.write_text("".join(json.dumps(row) + "\n" for row in ledger))
+        return subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "sources" / "filter_signals.py"),
+                str(signals),
+                "--seen",
+                str(root / "seen.jsonl"),
+                "--unfetchable",
+                str(unfetchable),
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_host_with_repeated_failures_is_blocked_for_new_urls(self) -> None:
+        # The failing host, not the committed alias, is what recurs: an
+        # MDPI paper 403'd across two papers and a doi.org alias in one
+        # fortnight, and every fresh URL looked unseen.
+        sheet = (
+            "# Signals 2026-08-26\n\n"
+            "## Signal S1\n- url: https://www.mdpi.com/2227-7390/14/16/9001\n\n"
+            "## Signal S2\n- url: https://arxiv.org/abs/2508.01234\n"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = self.run_filter(
+                root,
+                sheet,
+                [
+                    {"url": "https://doi.org/10.3390/math14152702", "host": "www.mdpi.com"},
+                    {"url": "https://www.mdpi.com/2227-9091/13/8/155", "host": "www.mdpi.com"},
+                ],
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("reason=unfetchable-host", result.stderr)
+            self.assertNotIn("mdpi.com/2227-7390/14/16/9001", result.stdout)
+            self.assertIn("https://arxiv.org/abs/2508.01234", result.stdout)
+
+    def test_single_failure_does_not_ban_a_host(self) -> None:
+        sheet = "# Signals 2026-08-26\n\n## Signal S1\n- url: https://www.mdpi.com/2227-7390/14/16/9001\n"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = self.run_filter(
+                root,
+                sheet,
+                [{"url": "https://www.mdpi.com/2227-9091/13/8/155", "host": "www.mdpi.com"}],
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("https://www.mdpi.com/2227-7390/14/16/9001", result.stdout)
+
+    def test_doi_resolver_is_never_blocked_as_a_host(self) -> None:
+        # Blocking the resolver would ban every DOI-addressed source over
+        # failures that belong to the publishers behind it.
+        sheet = "# Signals 2026-08-26\n\n## Signal S1\n- url: https://doi.org/10.1000/fresh\n"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = self.run_filter(
+                root,
+                sheet,
+                [
+                    {"url": "https://doi.org/10.1000/one"},
+                    {"url": "https://doi.org/10.1000/two"},
+                ],
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("https://doi.org/10.1000/fresh", result.stdout)
+
     def test_private_url_is_filtered_without_echoing_it_to_logs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -215,6 +293,82 @@ class SignalFilterTests(unittest.TestCase):
             self.assertEqual(result.stdout, "")
             self.assertIn("private-url:email", result.stderr)
             self.assertNotIn("david@example.com", result.stderr)
+
+
+class UnfetchableLedgerTests(unittest.TestCase):
+    def build_run(self, root: Path, slots: list[tuple[str, str, str, str]]) -> Path:
+        """Write an expand scratch dir. Each slot is (id, url, grounding, body)."""
+        expand = root / "expand"
+        expand.mkdir()
+        manifest = []
+        for slot_id, url, grounding, body in slots:
+            manifest.append(f"{slot_id}\ttracked\t{url}")
+            slot_dir = expand / slot_id
+            slot_dir.mkdir()
+            (slot_dir / "slot.md").write_text(f"- **Source URL:** {url}\n")
+            (slot_dir / "grounding").write_text(f"{grounding}\n")
+            (slot_dir / "body.md").write_text(body)
+            (slot_dir / "err.log").write_text("")
+        (expand / "manifest.tsv").write_text("\n".join(manifest) + "\n")
+        return expand
+
+    def run_append(self, expand: Path, egress: Path | None) -> list[dict]:
+        cmd = [sys.executable, str(REPO / "sources" / "append_unfetchable.py"), str(expand),
+               "--ledger", str(expand.parent / "ledger.jsonl")]
+        if egress is not None:
+            cmd += ["--egress-log", str(egress)]
+        env = {**os.environ, "RUN_ID": "2026-08-26-0509"}
+        result = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, check=False, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+    def test_snippet_grounded_slot_is_recorded_with_the_failing_host(self) -> None:
+        # This card ships, so it never appears in dropped.md. Without this
+        # row the refusal leaves no trace any later run can act on.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            expand = self.build_run(
+                root,
+                [
+                    ("01", "https://doi.org/10.3390/math14152702", "search-fallback", "## A card\n\nProse.\n"),
+                    ("02", "https://example.com/good", "fetch", "## Another\n\nProse.\n"),
+                ],
+            )
+            egress = root / "egress.log"
+            egress.write_text(
+                json.dumps(
+                    {
+                        "stage": "expand", "slot": "01", "kind": "fetch", "event": "result",
+                        "outcome": "error", "status": 403, "error": "HTTP 403",
+                        "host": "www.mdpi.com", "url": "https://www.mdpi.com/2227-7390/14/15/2702",
+                    }
+                )
+                + "\n"
+            )
+            rows = self.run_append(expand, egress)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["url"], "https://doi.org/10.3390/math14152702")
+            # The alias was committed; the publisher behind it is what refused.
+            self.assertEqual(rows[0]["host"], "www.mdpi.com")
+            self.assertIn("primary-fetch-failed", rows[0]["reason"])
+
+    def test_source_grounded_cards_are_not_ledgered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            expand = self.build_run(root, [("01", "https://example.com/good", "fetch", "## A card\n\nProse.\n")])
+            self.assertEqual(self.run_append(expand, None), [])
+
+    def test_model_drop_still_recorded_without_an_egress_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            expand = self.build_run(
+                root,
+                [("01", "https://example.com/thin", "fetch", "DROPPED slot=01 reason=no substance in source\n")],
+            )
+            rows = self.run_append(expand, None)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["reason"], "no substance in source")
+            self.assertEqual(rows[0]["host"], "example.com")
 
 
 class PipelineFlagTests(unittest.TestCase):

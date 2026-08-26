@@ -34,7 +34,15 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     whose normalized URL is in `memory/seen_urls.jsonl` (already
     surfaced) or `memory/unfetchable_urls.jsonl` (committed before
     but the expand fetch failed), dedupes within the sheet, and
-    writes the surviving pool to `.tmp/signals.md`. The scout prompt
+    writes the surviving pool to `.tmp/signals.md`. It also blocks a
+    whole **host** once the unfetchable ledger holds
+    `--host-block-threshold` (default 2) distinct failed URLs for it,
+    keyed on the host the fetch actually died at: a publisher that
+    refuses us (MDPI 403'd three times across two papers and an alias
+    in one fortnight) is a property of the source, not of the URL, so
+    a per-URL ledger never learns it. DOI-style resolvers are never
+    host-blocked -- they front every publisher, so banning one would
+    ban a whole class of academic signals. The scout prompt
     still receives the seen ledger so the model doesn't waste query
     budget, but ledger enforcement lives in code.
 4.  **plan** -- `pi -p prompts/compose_plan.md --no-tools
@@ -69,10 +77,15 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     (where `RUN_ID` is `YYYY-MM-DD-HHMM`); append URLs to
     `memory/seen_urls.jsonl`; record fetch-failed slots' Source URLs
     in `memory/unfetchable_urls.jsonl` via
-    `sources/append_unfetchable.py` (model-emitted drops only --
+    `sources/append_unfetchable.py` (model-emitted drops plus every
+    slot that shipped snippet-grounded, since its committed source
+    refused us just as surely and that failure produces no drop;
     `pi-exit-nonzero` and malformed bodies are skipped, and the step
     is skipped entirely when every slot dropped, since that usually
-    means a systemic failure rather than bad URLs); render
+    means a systemic failure rather than bad URLs). Each row carries
+    the `host` the fetch died at, read from `logs/${RUN_ID}/egress.log`
+    rather than parsed from the URL, so a committed doi.org alias
+    records the publisher behind it; render
     `out/${RUN_ID}.html` from the
     markdown via `sources/render_html.py` (pandoc preferred, Python
     `markdown` fallback, output-tree allowlist sanitizer, pinned local
@@ -355,7 +368,13 @@ There is no cron yet -- run it weekly when convenient.
     tool once returned 1.1M chars, and the former external `content.js`
     downloaded full responses before parsing. Neither is used now: the
     in-repo broker caps queries and streams response bytes under a hard
-    limit before content enters model context.
+    limit before content enters model context. A **page** that exceeds
+    the 2 MB cap is now truncated at it rather than refused: throwing
+    cost two live runs their primary source on ordinary articles that
+    were merely fat, and only `MAX_PAGE_CHARS` of extracted text ever
+    reaches a model. The socket is still destroyed at exactly the cap,
+    and the **search** JSON still fails hard, since a truncated payload
+    would not parse.
 -   **PDF sources are extracted, not fetched as text.** The broker's
     content-type allowlist admits `application/pdf` and
     `sources/brave-guard/pdf.js` recovers the text with Node's builtin
@@ -379,6 +398,15 @@ There is no cron yet -- run it weekly when convenient.
     produces no drop, so `pulse.sh` writes a census to
     `logs/${RUN_ID}/grounding.md`, adds a `- grounding:` line to
     `summary.md`, and logs a WARN naming each snippet-grounded slot.
+    Such a slot is also written to the unfetchable ledger at deliver,
+    so the refusal steers later runs instead of only being reported.
+-   **Single-label hostnames are refused** by `sources/url_policy.py`
+    and the broker alike. A doubled scheme
+    (`https://https://arxiv.org/...`) parses as the legal host `https`;
+    one reached a live manifest, DNS-failed at fetch, and silently cost
+    that slot its primary source. Keep the two gates in step: a URL
+    that clears the Python filter but is refused by the broker logs no
+    hop-0 attempt, and the egress audit then fails the whole run.
 -   Full run history is preserved by default. `PI_PULSE_RETENTION_DAYS=0`
     disables pruning; setting a positive value opts into deletion of only
     date-shaped children under `logs/` and `.pulse-sessions/`.

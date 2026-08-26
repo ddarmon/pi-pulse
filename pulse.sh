@@ -626,12 +626,17 @@ log "appending seen URLs"
 uv run sources/append_seen.py "$OUT" >> memory/seen_urls.jsonl
 
 # Record Source URLs of fetch-failed slots so filter_signals excludes
-# them from future runs. This runs only after the all-dropped bail
-# above: if every slot dropped, the cause is usually systemic (e.g. a
-# missing BRAVE_API_KEY), and recording those URLs would wrongly ban
-# good sources.
+# them from future runs. Slots that shipped snippet-grounded count as
+# fetch failures here: the card survived, but the committed source
+# still refused us, and that is invisible in the drop record. The
+# egress log supplies the host each fetch actually died at, which is
+# what blocks a publisher that keeps refusing new URLs. This runs only
+# after the all-dropped bail above: if every slot dropped, the cause is
+# usually systemic (e.g. a missing BRAVE_API_KEY), and recording those
+# URLs would wrongly ban good sources.
 log "recording unfetchable URLs"
 uv run sources/append_unfetchable.py .tmp/expand \
+  --egress-log "$LOG_DIR/egress.log" \
   2>"$LOG_DIR/append-unfetchable.err" \
   >> memory/unfetchable_urls.jsonl
 

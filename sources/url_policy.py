@@ -40,6 +40,13 @@ def validate_public_url(raw: str, *, resolve: bool = False) -> str:
     hostname = (parsed.hostname or "").rstrip(".").lower()
     if not hostname or any(char in hostname for char in "<>"):
         raise UrlPolicyError("malformed-host")
+    if "." not in hostname:
+        # A doubled scheme parses as a legal single-label host: a live signal
+        # sheet emitted `https://https://arxiv.org/html/2512.16959v1`, whose
+        # host is `https`. It passed every gate, DNS-failed at fetch time, and
+        # the slot silently degraded to a search snippet. No public web host
+        # is single-label, so reject the shape where it is still cheap.
+        raise UrlPolicyError("dotless-host")
     expected = 443 if parsed.scheme.lower() == "https" else 80
     if port is not None:
         if port != expected:

@@ -9,6 +9,15 @@ and DNS-pins every outbound hop, refuses local/non-public addresses and
 nonstandard ports, accepts only HTTP(S) GET, disables compression, streams
 under fixed byte limits, and appends attempts/results to the run's private
 egress JSONL. Redirects are resolved and revalidated one at a time.
+Single-label hostnames are refused: a doubled scheme
+(`https://https://arxiv.org/...`) parses as the legal host `https`, which
+reached a live manifest and cost that slot its primary source.
+
+A page that exceeds the byte cap is truncated at the cap rather than refused,
+because losing the whole source over its size is the worse outcome and only
+`MAX_PAGE_CHARS` of extracted text reaches a model anyway; the socket is still
+destroyed at exactly the limit. Callers that need a complete body -- the Brave
+search JSON -- opt out and keep the hard failure.
 
 `pdf.js` extracts text from `application/pdf` responses using Node's builtin
 `zlib`, because the prose in an academic PDF lives in compressed content

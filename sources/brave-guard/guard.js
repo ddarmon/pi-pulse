@@ -177,6 +177,12 @@ export function validateUrlSyntax(raw) {
   if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal") || hostname.endsWith(".home.arpa")) {
     throw new GuardError("local hostnames are refused", "local-hostname");
   }
+  // A doubled scheme ("https://https://arxiv.org/...") parses as the legal
+  // single-label host `https`. No public web host is single-label, and the
+  // Python policy rejects the same shape, so the two gates stay in step.
+  if (!hostname.includes(".")) {
+    throw new GuardError("single-label hostnames are refused", "dotless-host");
+  }
   if (url.port) {
     const expected = url.protocol === "https:" ? "443" : "80";
     if (url.port !== expected) throw new GuardError("non-standard ports are refused", "bad-port");
@@ -213,7 +219,8 @@ export async function resolvePublic(url, lookup = dns.lookup) {
   return addresses;
 }
 
-export async function readStreamBounded(stream, maxBytes, signal) {
+export async function readStreamBounded(stream, maxBytes, signal, options = {}) {
+  const { truncate = false, onTruncate = null } = options;
   const chunks = [];
   let total = 0;
   for await (const chunk of stream) {
@@ -222,11 +229,24 @@ export async function readStreamBounded(stream, maxBytes, signal) {
       throw new GuardError("request aborted", "aborted");
     }
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.length;
-    if (total > maxBytes) {
+    if (total + buffer.length > maxBytes) {
+      // Losing a whole page because it is fat is a worse outcome than
+      // reading a prefix of it: two live runs degraded to search snippets
+      // on ordinary articles that merely exceeded the cap. Callers that
+      // need a complete body (the search JSON) leave truncate off and
+      // still get the hard failure. The byte ceiling is unchanged either
+      // way -- the socket is destroyed at exactly maxBytes.
+      if (!truncate) {
+        stream.destroy();
+        throw new GuardError(`response exceeds ${maxBytes} bytes`, "response-too-large");
+      }
+      chunks.push(buffer.subarray(0, maxBytes - total));
+      total = maxBytes;
       stream.destroy();
-      throw new GuardError(`response exceeds ${maxBytes} bytes`, "response-too-large");
+      onTruncate?.();
+      break;
     }
+    total += buffer.length;
     chunks.push(buffer);
   }
   return Buffer.concat(chunks, total);
@@ -280,6 +300,7 @@ export async function guardedGet(rawUrl, options = {}) {
     query = null,
     lookup = dns.lookup,
     open = openResponse,
+    truncate = false,
   } = options;
   let requested;
   try {
@@ -353,12 +374,18 @@ export async function guardedGet(rawUrl, options = {}) {
         throw new GuardError(`unexpected content encoding: ${encoding}`, "content-encoding");
       }
       const declared = Number(response.headers["content-length"] || 0);
-      if (Number.isFinite(declared) && declared > maxBytes) {
+      if (!truncate && Number.isFinite(declared) && declared > maxBytes) {
         response.destroy();
         throw new GuardError(`declared response exceeds ${maxBytes} bytes`, "response-too-large");
       }
-      const body = await readStreamBounded(response, maxBytes, signal);
-      logEgress({ event: "result", ...baseLog, status, bytes: body.length, outcome: "ok" });
+      let truncated = false;
+      const body = await readStreamBounded(response, maxBytes, signal, {
+        truncate,
+        onTruncate: () => {
+          truncated = true;
+        },
+      });
+      logEgress({ event: "result", ...baseLog, status, bytes: body.length, outcome: "ok", truncated });
       return { body, headers: response.headers, status, url: current.href };
     } catch (error) {
       logEgress({
@@ -446,6 +473,9 @@ export async function fetchPage(rawUrl, options = {}) {
     ...options,
     maxBytes: options.maxBytes || MAX_PAGE_BYTES,
     kind: options.kind || "fetch",
+    // A page is read for its prose, and only MAX_PAGE_CHARS of that prose
+    // ever reaches a model, so a prefix is worth far more than a failure.
+    truncate: options.truncate ?? true,
     headers: {
       "User-Agent": "pi-pulse-fetch/1.0",
       Accept: "text/html,application/xhtml+xml,text/plain,text/markdown,application/pdf;q=0.9,application/xml;q=0.8,*/*;q=0.1",

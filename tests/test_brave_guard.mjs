@@ -9,6 +9,7 @@ import { deflateSync } from "node:zlib";
 import {
   braveSearch,
   extractReadable,
+  fetchPage,
   guardedGet,
   isForbiddenAddress,
   readEnvValue,
@@ -26,6 +27,11 @@ test("URL syntax policy accepts public HTTP(S) and rejects dangerous shapes", ()
     "http://localhost/",
     "https://example.com:8443/",
     `https://example.com/?q=${"x".repeat(513)}`,
+    // A doubled scheme parses as the single-label host `https`. The Python
+    // policy rejects the same shape; the two gates must not diverge, or a
+    // URL that clears one and fails the other aborts the run's audit.
+    "https://https://arxiv.org/html/2512.16959v1",
+    "https://intranet/paper",
   ]) {
     assert.throws(() => validateUrlSyntax(value), { name: "GuardError" });
   }
@@ -85,6 +91,38 @@ test("redirect targets are re-resolved and private answers are refused", async (
 test("response stream is capped while reading", async () => {
   const stream = Readable.from([Buffer.alloc(6), Buffer.alloc(6)]);
   await assert.rejects(readStreamBounded(stream, 10), /exceeds 10 bytes/);
+});
+
+test("an oversize page is truncated at the cap instead of lost", async () => {
+  // Two live runs degraded to search snippets on ordinary articles that
+  // merely exceeded the cap; a prefix still carries the prose.
+  const stream = Readable.from([Buffer.alloc(6, 0x61), Buffer.alloc(6, 0x62)]);
+  let truncated = false;
+  const body = await readStreamBounded(stream, 10, undefined, {
+    truncate: true,
+    onTruncate: () => {
+      truncated = true;
+    },
+  });
+  assert.equal(body.length, 10, "the byte ceiling still binds exactly");
+  assert.equal(body.toString(), "aaaaaabbbb");
+  assert.equal(truncated, true);
+});
+
+test("fetchPage keeps the prose of a page that exceeds the byte cap", async () => {
+  const prose = "A substantive public article sentence. ".repeat(12);
+  const html = `<html><title>Fat</title><body><p>${prose}</p></body></html>`;
+  const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
+  const open = async () => {
+    const response = Readable.from([Buffer.from(html), Buffer.alloc(4 * 1024 * 1024)]);
+    response.statusCode = 200;
+    // Declared oversize too: a truncating read must not be pre-empted by
+    // the content-length check.
+    response.headers = { "content-type": "text/html", "content-length": "5000000" };
+    return response;
+  };
+  const output = await fetchPage("https://example.com/fat", { lookup, open });
+  assert.match(output, /substantive public article/);
 });
 
 test("HTML extraction drops scripts and retains substantive prose", () => {
