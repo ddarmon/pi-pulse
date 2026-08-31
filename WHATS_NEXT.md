@@ -48,6 +48,46 @@ what was fetched. A model-as-judge pass after expand could catch this
 case has surfaced yet. Revisit if a future audit finds a card whose
 URL resolves but whose claims don't match the page content.
 
+### 3. Bounded timeouts around the synthesis stages
+
+`run_pi_retry` has no per-attempt timeout. That is why `2026-08-30`
+burned roughly three hours to fail: distill returned 0 bytes on all
+three attempts, and each empty attempt sat for ~61 minutes first.
+
+The glm-5.3 swap addressed the *cause* of those particular stalls, not
+the class. A provider stall on any model still costs
+`PI_PULSE_SYNTH_RETRIES` x (however long the provider takes to give
+up). Historic evidence, with latency uncorrelated to input size:
+
+| run | stage latencies |
+|---|---|
+| 2026-08-12 | distill 3147s |
+| 2026-08-16 | distill 4058s |
+| 2026-08-25 | distill 1916s, scout 2831s, plan 838s |
+
+The lever is a `timeout` wrapper (say `PI_PULSE_STAGE_TIMEOUT`) around
+each attempt inside `run_pi_retry`, so a stalled attempt is abandoned
+and resampled rather than waited out.
+
+### 4. If glm-5.3-flash is ever adopted, map `off` to null
+
+`glm-5.3-flash:cloud` (320B total / 18B active, 1M context, vision) is
+on the endpoint and is the current *interactive* pi default. It is not
+in the repo catalog and no stage uses it. If it is picked up, expand is
+the natural candidate: N calls per run, smallest inputs.
+
+Its reasoning **cannot be disabled** -- its Ollama page states reasoning
+is always on, with effort tunable per request across low, high and max.
+So map `off` and `minimal` to **null** exactly as `glm-5.3:cloud` does,
+and let `check_models.py` abort. Earlier advice to map `off` to a cheap
+level is wrong: it reintroduces the silent-corruption failure where the
+monologue lands in the answer text and the 0-byte guard passes it
+through (see CLAUDE.md, "GLM-5.3 cannot stop thinking").
+
+Any A/B on wall time needs 15+ runs, not 5, and should compare on
+stall-immune metrics: tool calls, unique URLs, `signals: raw=/kept=`,
+and the grounding fetch-vs-fallback ratio.
+
 ## Recently shipped
 
 -   **TCC-safe feedback-server LaunchAgent (2026-07-20).** The original

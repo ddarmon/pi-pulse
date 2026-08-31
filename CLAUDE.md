@@ -303,11 +303,15 @@ and a nonce-based CSP on brief pages. Only pinned local MathJax assets
 are served from a fixed asset route. The server only ever writes
 `out/*.feedback.md`; ingest sweeps them on the next run as usual.
 
-**Deployment state (this machine):** the server is INSTALLED and
-running under launchd as `com.user.pi-pulse-feedback` (plist at
-`~/Library/LaunchAgents/`, TCC-safe deployment installed 2026-07-20),
-bound to the Tailscale IP via `PI_PULSE_FEEDBACK_HOST=tailscale` in
-`.env`. `scripts/install-feedback-server.sh` installs a stable native
+**Deployment state (2026-08-31):** the server runs on the always-on
+**MacBook Pro** (`davids-macbook-pro`, tailnet 100.89.151.117) under
+launchd as `com.user.pi-pulse-feedback`, bound to the Tailscale IP via
+`PI_PULSE_FEEDBACK_HOST=tailscale` in `.env`. Rate cards at
+`http://davids-macbook-pro:8377/`. The MacBook Air ran it until
+2026-08-31 and is now `bootout` + `disable`d there (the plist is
+retained, so re-enabling is one installer run); rate on the Pro, since
+ingest only sweeps `out/*.feedback.md` in the checkout that generated
+the brief. `scripts/install-feedback-server.sh` installs a stable native
 wrapper at `~/Applications/Pi Pulse Feedback.app`; that app has the
 Documents-folder consent needed to reach this checkout after a cold
 launch. The LaunchAgent must point at the native wrapper and keep its
@@ -321,9 +325,9 @@ launchd job holds the port (EADDRINUSE crash-loop). Logs:
 `~/Library/Logs/pi-pulse/feedback-server.{out,err}.log`. User-facing
 setup steps live in README.md ("Rate cards from your phone").
 
-**Scheduled pulse deployment (this machine):** the daily 05:00 run is
-installed via `scripts/install-pulse-agent.sh` as
-`com.user.pi-pulse`, pointing at the native wrapper
+**Scheduled pulse deployment (2026-08-31):** the daily 05:00 run lives
+on the **MacBook Pro**, installed via `scripts/install-pulse-agent.sh`
+as `com.user.pi-pulse`, pointing at the native wrapper
 `~/Applications/Pi Pulse.app` (same TCC pattern as the feedback
 server). The wrapper is required: pointing launchd directly at
 bash/pulse.sh leaves node without Documents consent on a cold start, so
@@ -332,7 +336,23 @@ the run. Job stdout/stderr: `~/Library/Logs/pi-pulse/pulse.{out,err}.log`
 (per-run logs stay in `logs/<RUN_ID>/`). The LaunchAgent bakes in the
 installing shell's PATH -- re-run the installer after node/uv/pi path
 changes. `--rebuild-app` recompiles the wrapper, which changes its code
-identity and re-prompts for Documents consent.
+identity and re-prompts for Documents consent. Install from a real
+terminal, never `ssh <host> './scripts/install-pulse-agent.sh'`: a
+non-interactive login shell skips `.zshrc`, so the baked PATH loses
+`~/.local/bin` and the job dies at step 0a2 on `uv run check_models.py`.
+
+**Why the Pro (2026-08-31 cutover).** The Air travels and is asleep at
+05:00, so it produced no brief when away; the Pro has been up 84 days
+and was *already* serving the models (the Air's
+`PI_PULSE_OLLAMA_BASE_URL` pointed at its tailnet address), so the move
+made inference local. Sessions now come from the shared archive rather
+than the host -- see `PI_PULSE_SESH_ARCHIVE_ROOT` in `.env.example`.
+Two host-level things the port needed and would silently break without:
+`~/.pi/agent/trust.json` must list the checkout path (an untrusted repo
+makes pi prompt on its first tool call and stalls the run), and Anki
+must be synced before collect (a collection five days stale reported 0
+reviews against the Air's 139, starving the bridge slot -- `pulse.sh`
+step 0b2 now does this).
 
 ## Profile-suggest (weekly, manual)
 
