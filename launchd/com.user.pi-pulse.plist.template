@@ -1,23 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  pi-pulse launchd template. Substitute the paths below for your
-  install, then copy to ~/Library/LaunchAgents/ and load with
-  `launchctl load ~/Library/LaunchAgents/com.user.pi-pulse.plist`.
+  Scheduled pi-pulse LaunchAgent.
 
-  Placeholders:
-    {{REPO}}    Absolute path to the pi-pulse checkout
-                (e.g. /Users/you/code/pi-pulse)
-    {{HOME}}    Your home directory (e.g. /Users/you)
-    {{PATH}}    A PATH that includes wherever `pi`, `sesh`, `uv`,
-                `ollama`, and `curl` live (e.g.
-                /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin)
+  Install with scripts/install-pulse-agent.sh rather than rendering this
+  template by hand. The installer compiles a native app wrapper under
+  ~/Applications ("Pi Pulse.app"), obtains its Documents-folder consent
+  once, and substitutes:
 
-  Secrets (BRAVE_API_KEY, etc.) belong in {{REPO}}/.env, which
-  pulse.sh sources before running any stage. launchd does NOT
-  inherit your shell profile (~/.zprofile, ~/.zshrc), so keys
-  exported only there will be missing at run time and the expand
-  stage will silently produce an empty brief. Do not duplicate
-  secrets into the EnvironmentVariables block below.
+    {{REPO}}      Absolute path to the pi-pulse checkout
+    {{HOME}}      User home directory
+    {{APP_EXEC}}  Native executable inside Pi Pulse.app
+    {{PATH}}      PATH containing pi, uv, sesh, ollama, node, and curl
+    {{HOUR}}      Daily run hour (default 5)
+    {{MINUTE}}    Daily run minute (default 0)
+
+  The native app is the stable TCC identity responsible for
+  protected-folder access. Do not point this job directly at bash: on a
+  cold start, children such as node are denied access to a checkout under
+  ~/Documents without any prompt, the expand guard fetch fails with EPERM,
+  and the run aborts at the egress audit.
+
+  Secrets (BRAVE_API_KEY, etc.) belong in {{REPO}}/.env, which the guard
+  and pulse.sh read directly. launchd does NOT inherit your shell profile
+  (~/.zprofile, ~/.zshrc), so keys exported only there will be missing at
+  run time. Do not duplicate secrets into the EnvironmentVariables block
+  below.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -28,24 +35,30 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>{{REPO}}/pulse.sh</string>
+        <string>{{APP_EXEC}}</string>
+        <string>--run</string>
+        <string>--repo</string>
+        <string>{{REPO}}</string>
     </array>
 
-    <key>WorkingDirectory</key>
-    <string>{{REPO}}</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.user.pi-pulse</string>
+    </array>
 
     <key>StartCalendarInterval</key>
     <dict>
-        <key>Hour</key><integer>5</integer>
-        <key>Minute</key><integer>30</integer>
+        <key>Hour</key><integer>{{HOUR}}</integer>
+        <key>Minute</key><integer>{{MINUTE}}</integer>
     </dict>
 
+    <!-- Keep launchd's own file operations outside TCC-protected
+         Documents; per-run logs still land in {{REPO}}/logs/. -->
     <key>StandardOutPath</key>
-    <string>{{REPO}}/logs/stdout.log</string>
+    <string>{{HOME}}/Library/Logs/pi-pulse/pulse.out.log</string>
 
     <key>StandardErrorPath</key>
-    <string>{{REPO}}/logs/stderr.log</string>
+    <string>{{HOME}}/Library/Logs/pi-pulse/pulse.err.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

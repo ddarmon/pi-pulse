@@ -14,12 +14,14 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     `.tmp/{chats,sesh,anki_signals}_recent.md`.
     `sources/build_recent_pulses.py` writes `.tmp/recent_pulses.md`
     (scout and plan both read it).
-2.  **distill** -- `pi -p prompts/distill_context.md --no-skills` reads
+2.  **distill** -- `pi -p prompts/distill_context.md --no-tools
+    --no-context-files --no-extensions --no-skills` reads
     the three input bundles plus `memory/interests.md` and produces a
     five-section memo at `.tmp/interests_today.md` (Active threads, Open
     questions, Persistent interests, Study reinforcement, Avoid).
-3.  **scout** -- `pi -p prompts/scout_signals.md` runs broad
-    `brave-search` queries per interest cluster (memo bullets +
+3.  **scout** -- `pi -p prompts/scout_signals.md` runs with no built-in
+    tools and only the in-repo `search`/`fetch` broker extension. It probes
+    Brave Search per interest cluster (redacted memo bullets +
     durable-profile candidates from `interests.md`) and writes a
     structured signal sheet at `.tmp/signals_raw.md`: one entry per
     fresh primary source with `url`, `published`, `source_class`,
@@ -32,10 +34,19 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     whose normalized URL is in `memory/seen_urls.jsonl` (already
     surfaced) or `memory/unfetchable_urls.jsonl` (committed before
     but the expand fetch failed), dedupes within the sheet, and
-    writes the surviving pool to `.tmp/signals.md`. The scout prompt
+    writes the surviving pool to `.tmp/signals.md`. It also blocks a
+    whole **host** once the unfetchable ledger holds
+    `--host-block-threshold` (default 2) distinct failed URLs for it,
+    keyed on the host the fetch actually died at: a publisher that
+    refuses us (MDPI 403'd three times across two papers and an alias
+    in one fortnight) is a property of the source, not of the URL, so
+    a per-URL ledger never learns it. DOI-style resolvers are never
+    host-blocked -- they front every publisher, so banning one would
+    ban a whole class of academic signals. The scout prompt
     still receives the seen ledger so the model doesn't waste query
     budget, but ledger enforcement lives in code.
-4.  **plan** -- `pi -p prompts/compose_plan.md --no-skills` ranks
+4.  **plan** -- `pi -p prompts/compose_plan.md --no-tools
+    --no-context-files --no-extensions --no-skills` ranks
     scout signals into card slots. Each slot's `Source URL:` is
     copied verbatim from `.tmp/signals.md` -- plan never invents URLs
     or topics. `PI_PULSE_CARDS_{TRACKED,ADJACENT,BRIDGE,FOLLOWUP}` are
@@ -55,12 +66,10 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     `logs/${RUN_ID}/dropped.md`. `sources/expand_slot.sh`
     is invoked once per slot via `xargs -P
     $PI_PULSE_EXPAND_PARALLEL` (default 4). Each per-slot
-    `pi -p prompts/compose_expand.md` fetches the committed Source URL
-    via `brave-search` `content.js` (one fetch budgeted; one fallback
-    `search.js` allowed only if the fetch 404s), then writes 250--400
-    words of prose to `.tmp/expand/NN/body.md`. The built-in
-    `web_search`/`web_fetch` tools are forbidden -- their results are
-    unbounded and have overflowed context before. Drops are reported
+    guard fetches the manifest's committed Source URL before Pi starts
+    (one bounded fetch; one bounded search fallback on failure). The
+    resulting `page.md` is attached to a sealed no-tools expand call,
+    which writes 250--400 words to `.tmp/expand/NN/body.md`. Drops are reported
     on stderr (`DROPPED slot=NN reason=...`) and aggregated into
     `logs/${RUN_ID}/dropped.md` -- never into the delivered brief.
 6.  **deliver** -- stitch `.tmp/expand/theme.md` (lifted from plan)
@@ -68,13 +77,19 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     (where `RUN_ID` is `YYYY-MM-DD-HHMM`); append URLs to
     `memory/seen_urls.jsonl`; record fetch-failed slots' Source URLs
     in `memory/unfetchable_urls.jsonl` via
-    `sources/append_unfetchable.py` (model-emitted drops only --
+    `sources/append_unfetchable.py` (model-emitted drops plus every
+    slot that shipped snippet-grounded, since its committed source
+    refused us just as surely and that failure produces no drop;
     `pi-exit-nonzero` and malformed bodies are skipped, and the step
     is skipped entirely when every slot dropped, since that usually
-    means a systemic failure rather than bad URLs); render
+    means a systemic failure rather than bad URLs). Each row carries
+    the `host` the fetch died at, read from `logs/${RUN_ID}/egress.log`
+    rather than parsed from the URL, so a committed doi.org alias
+    records the publisher behind it; render
     `out/${RUN_ID}.html` from the
     markdown via `sources/render_html.py` (pandoc preferred, Python
-    `markdown` fallback, MathJax loaded only when math is detected);
+    `markdown` fallback, output-tree allowlist sanitizer, pinned local
+    MathJax loaded only when math is detected);
     write an editable feedback companion file at
     `out/${RUN_ID}.feedback.md` via
     `sources/build_feedback_template.py` (one numbered line per
@@ -126,15 +141,44 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
         which makes it **stall-proof by construction** (no reasoning channel
         to run away in) and, in a live test (2026-06-28), also *faster* with
         an equal-or-fuller signal sheet. This REQUIRES a `thinkingLevelMap`
-        on the `glm-5.2:cloud` entry in `~/.pi/agent/models.json`:
-        `{"off":"none","low":"low","medium":"medium","high":"high","xhigh":"max"}`.
+        on the `glm-5.2:cloud` entry, which now lives in the **repo-owned**
+        catalog `pi-agent/models.json.template` (see below), not in
+        `~/.pi/agent/models.json`.
         Without it, pi's bare `--thinking off` **omits** the field over the
         OpenAI-compat endpoint and the model still thinks (it does NOT
-        disable). With it, pi sends `reasoning_effort=none`.
+        disable). With it, pi sends `reasoning_effort=none`. Measured
+        2026-08-26 on identical prompts: with the map, 0 chars of thinking;
+        without it, 226. `--thinking low` still thinks (231 chars), so the
+        map is a real switch, not blanket suppression.
     2.  **distill/plan keep thinking on** (ranking/synthesis benefit from it)
         but are wrapped by `run_pi_retry` in `pulse.sh`, which resamples on
         0-byte output up to `PI_PULSE_SYNTH_RETRIES` (default 3). scout is
         wrapped too as belt-and-suspenders.
+-   **The Pi model catalog is repo-owned.** `pulse.sh` and
+    `scripts/suggest-profile.sh` render `pi-agent/models.json.template`
+    (double-brace `{{OLLAMA_BASE_URL}}`, from `PI_PULSE_OLLAMA_BASE_URL`)
+    into the gitignored `.pi-agent/` and export
+    `PI_CODING_AGENT_DIR` so pi reads that catalog instead of
+    `~/.pi/agent/models.json`. `auth.json`, `trust.json`, and
+    `settings.json` are symlinked back to the real agent dir --
+    **trust.json is load-bearing**: an untrusted repo makes pi prompt on
+    the first tool call, which once stalled scout ~10h.
+    Why: the machine-global file is rewritten by `ollama launch pi` and
+    `pi update` (twice on 2026-08-26 alone), and a launcher-written entry
+    carries **no `thinkingLevelMap` and no `contextWindow`**. From
+    2026-08-15 to 2026-08-26 there was no `glm-5.2:cloud` entry at all:
+    pi warned `Using custom model id`, passed the id through to Ollama --
+    so runs *worked* -- while `PI_PULSE_SCOUT_THINKING=off` silently did
+    nothing and pi assumed its 128k default against a 1M-token model.
+    `sources/check_models.py` runs before the first pi call (step 0a2)
+    and fails the run if any stage's model is absent, lacks a
+    `contextWindow`, or asks for a thinking level the catalog would drop;
+    stderr lands in `logs/${RUN_ID}/check-models.err`. `contextWindow`
+    values come from Ollama itself
+    (`curl -s $OLLAMA/api/show -d '{"model":"<id>"}'` ->
+    `model_info.*.context_length`); glm-5.2 is 1048576, not the 262144
+    that a stale entry may claim. To try a new model, add it to the
+    template -- editing `~/.pi/agent/models.json` no longer affects a run.
 -   **pi -> Ollama thinking plumbing (gotchas).** pi has no native Ollama
     provider; `ollama` in `models.json` is a user-defined OpenAI-compat
     provider, so pi sends the thinking level as `reasoning_effort` over
@@ -237,10 +281,9 @@ it persistently. Security model: the tailnet is the auth boundary;
 defense-in-depth is a client-IP allowlist (loopback + `100.64.0.0/10`
 + Tailscale IPv6 ULA -- everything else 403s even if misbound),
 strict `RUN_ID` regex on every path construction, a 16 KB POST cap,
-and no static file serving. The brief pages are intentionally served
-WITHOUT a CSP: `render_html.py` output uses inline scripts and CDN
-MathJax, and a strict CSP would break math rendering -- don't "harden"
-this without checking that. The server only ever writes
+an exact same-origin check plus JSON content-type gate on rating POSTs,
+and a nonce-based CSP on brief pages. Only pinned local MathJax assets
+are served from a fixed asset route. The server only ever writes
 `out/*.feedback.md`; ingest sweeps them on the next run as usual.
 
 **Deployment state (this machine):** the server is INSTALLED and
@@ -260,6 +303,19 @@ code keeps serving. Never start a second instance manually while the
 launchd job holds the port (EADDRINUSE crash-loop). Logs:
 `~/Library/Logs/pi-pulse/feedback-server.{out,err}.log`. User-facing
 setup steps live in README.md ("Rate cards from your phone").
+
+**Scheduled pulse deployment (this machine):** the daily 05:00 run is
+installed via `scripts/install-pulse-agent.sh` as
+`com.user.pi-pulse`, pointing at the native wrapper
+`~/Applications/Pi Pulse.app` (same TCC pattern as the feedback
+server). The wrapper is required: pointing launchd directly at
+bash/pulse.sh leaves node without Documents consent on a cold start, so
+every expand guard fetch dies with EPERM and the egress audit aborts
+the run. Job stdout/stderr: `~/Library/Logs/pi-pulse/pulse.{out,err}.log`
+(per-run logs stay in `logs/<RUN_ID>/`). The LaunchAgent bakes in the
+installing shell's PATH -- re-run the installer after node/uv/pi path
+changes. `--rebuild-app` recompiles the wrapper, which changes its code
+identity and re-prompts for Documents consent.
 
 ## Profile-suggest (weekly, manual)
 
@@ -308,6 +364,18 @@ There is no cron yet -- run it weekly when convenient.
     detail. `expand.log.md` concatenates per-slot session digests.
 -   `logs/${RUN_ID}/dropped.md` -- which expand slots dropped and why
     (empty `(none)` on a clean run).
+-   `logs/${RUN_ID}/grounding.md` -- how many delivered cards came from the
+    committed primary source vs the search-snippet fallback, naming each
+    snippet-grounded slot. A fallback card never appears in `dropped.md`,
+    so this is the only place that degradation is visible.
+-   `logs/${RUN_ID}/egress.log` -- append-only JSONL of every guarded
+    outbound attempt; `egress.md` is the post-run invariant/provenance audit.
+-   `logs/${RUN_ID}/capabilities.jsonl` -- prompt-free evidence of provider,
+    model, thinking level, and security flags extracted from each exact Pi
+    invocation.
+-   `logs/${RUN_ID}/check-models.err` -- the preflight catalog verdict. A
+    failure here aborts the run before the first pi call and names exactly
+    which stage/model/thinking level the catalog cannot support.
 -   `logs/${RUN_ID}/*.err` -- raw stderr from each subprocess.
 -   `.pulse-sessions/${RUN_ID}/{distill,scout,plan,expand}/` -- full
     pi session JSONLs. Parse with `sources/inspect_session.py`. Expand
@@ -322,18 +390,59 @@ There is no cron yet -- run it weekly when convenient.
     output *after `PI_PULSE_SYNTH_RETRIES` attempts* (default 3; each
     stage is wrapped by `run_pi_retry`, which resamples on empty output
     -- see the glm-5.2 thinking-runaway note above), if the ledger
-    filter drops every scout signal, or if every expand slot drops.
+    filter drops every scout signal, if the egress audit fails, or if every
+    expand slot drops.
     Logs are preserved. A retried stage logs
     `<stage>: EMPTY output on attempt N/M ...` / `recovered on attempt N`.
 
 ## Known constraints
 
 -   `kimi-k2.6:cloud` context is 262k tokens. The built-in `web_search`
-    tool returns unbounded results (one call was observed at 1.1M
-    chars), which is why `compose_expand.md` mandates the `brave-search`
-    skill instead: its `search.js` and `content.js` return size-bounded
-    markdown. Do not reintroduce `web_search`/`web_fetch` without a
-    size-bounding plan.
+    tool once returned 1.1M chars, and the former external `content.js`
+    downloaded full responses before parsing. Neither is used now: the
+    in-repo broker caps queries and streams response bytes under a hard
+    limit before content enters model context. A **page** that exceeds
+    the 2 MB cap is now truncated at it rather than refused: throwing
+    cost two live runs their primary source on ordinary articles that
+    were merely fat, and only `MAX_PAGE_CHARS` of extracted text ever
+    reaches a model. The socket is still destroyed at exactly the cap,
+    and the **search** JSON still fails hard, since a truncated payload
+    would not parse.
+-   **PDF sources are extracted, not fetched as text.** The broker's
+    content-type allowlist admits `application/pdf` and
+    `sources/brave-guard/pdf.js` recovers the text with Node's builtin
+    `zlib` (no dependency): an academic PDF's prose lives in
+    FlateDecode-compressed content streams, so the response bytes carry
+    none of it and there is nothing a model could summarize from them.
+    Inflates are capped per stream and per document (decompression
+    bombs), the scanner is a single linear pass (an early regex version
+    hung on binary input), and streams whose text is not mostly printable
+    ASCII are dropped so images/fonts cannot leak noise into context.
+    Scanned image-only PDFs are refused as having no text layer and the
+    slot drops, which is correct. CID/Type0 fonts and math glyphs garble.
+    Between 2026-08-08 (`519301b`) and this change the allowlist rejected
+    PDFs outright, so every PDF source silently degraded to a Brave
+    snippet -- the population most affected is foundational/theory
+    material, historically the best-rated cards.
+-   **Snippet-grounded cards are reported, not silent.** When a slot's
+    primary fetch fails, `expand_slot.sh` still writes a card from the
+    search-snippet fallback and records `search-fallback` in
+    `.tmp/expand/NN/grounding`. That is a real quality degradation which
+    produces no drop, so `pulse.sh` writes a census to
+    `logs/${RUN_ID}/grounding.md`, adds a `- grounding:` line to
+    `summary.md`, and logs a WARN naming each snippet-grounded slot.
+    Such a slot is also written to the unfetchable ledger at deliver,
+    so the refusal steers later runs instead of only being reported.
+-   **Single-label hostnames are refused** by `sources/url_policy.py`
+    and the broker alike. A doubled scheme
+    (`https://https://arxiv.org/...`) parses as the legal host `https`;
+    one reached a live manifest, DNS-failed at fetch, and silently cost
+    that slot its primary source. Keep the two gates in step: a URL
+    that clears the Python filter but is refused by the broker logs no
+    hop-0 attempt, and the egress audit then fails the whole run.
+-   Full run history is preserved by default. `PI_PULSE_RETENTION_DAYS=0`
+    disables pruning; setting a positive value opts into deletion of only
+    date-shaped children under `logs/` and `.pulse-sessions/`.
 -   `sesh` requires a built index. `collect_sesh.py` runs `sesh refresh`
     before `sesh sessions` (idempotent, \~5s). Removing that call will
     silently break `pulse.sh` under `set -e`.

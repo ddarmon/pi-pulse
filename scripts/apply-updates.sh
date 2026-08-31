@@ -14,13 +14,12 @@
 # generate proposals.
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
 
 if [[ ! -f .tmp/profile_updates.md ]]; then

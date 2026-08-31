@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import shutil
 import socket
 import sys
@@ -125,6 +126,64 @@ class TestRunIdValidation(unittest.TestCase):
             self.assertFalse(feedback_server.valid_run_id(bad), bad)
 
 
+class TestOriginValidation(unittest.TestCase):
+    HOSTS = feedback_server.allowed_origin_hosts("pulse.example")
+
+    def test_absent_origin_is_allowed_for_non_browser_clients(self):
+        self.assertTrue(feedback_server.origin_allowed(None, self.HOSTS, 8377))
+
+    def test_same_origin_is_allowed(self):
+        self.assertTrue(
+            feedback_server.origin_allowed(
+                "http://pulse.example:8377", self.HOSTS, 8377
+            )
+        )
+
+    def test_foreign_or_malformed_origin_is_denied(self):
+        self.assertFalse(
+            feedback_server.origin_allowed(
+                "https://attacker.example", self.HOSTS, 8377
+            )
+        )
+        self.assertFalse(feedback_server.origin_allowed("null", self.HOSTS, 8377))
+
+    def test_dns_rebinding_host_is_denied_despite_matching_host_header(self):
+        # A rebinding page presents Origin: http://evil.example:8377 with a
+        # matching Host header; validation is pinned to the bind host, so
+        # the client-controlled pair must not matter.
+        self.assertFalse(
+            feedback_server.origin_allowed(
+                "http://evil.example:8377", self.HOSTS, 8377
+            )
+        )
+
+    def test_wrong_port_is_denied(self):
+        self.assertFalse(
+            feedback_server.origin_allowed(
+                "http://pulse.example:9999", self.HOSTS, 8377
+            )
+        )
+
+    def test_loopback_bind_allows_loopback_aliases(self):
+        hosts = feedback_server.allowed_origin_hosts("127.0.0.1")
+        self.assertTrue(
+            feedback_server.origin_allowed("http://localhost:8377", hosts, 8377)
+        )
+
+    def test_extra_hosts_opt_in(self):
+        hosts = feedback_server.allowed_origin_hosts(
+            "100.64.1.2", "pulse.tail1234.ts.net"
+        )
+        self.assertTrue(
+            feedback_server.origin_allowed(
+                "http://pulse.tail1234.ts.net:8377", hosts, 8377
+            )
+        )
+        self.assertFalse(
+            feedback_server.origin_allowed("http://localhost:8377", hosts, 8377)
+        )
+
+
 class TestMarkRoundTrip(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="pulse-fb-"))
@@ -210,11 +269,14 @@ class TestHTTP(unittest.TestCase):
         with urllib.request.urlopen(self.url(path), timeout=5) as resp:
             return resp.status, resp.read().decode("utf-8")
 
-    def post_json(self, obj: dict):
+    def post_json(self, obj: dict, *, origin: str | None = None):
+        headers = {"Content-Type": "application/json"}
+        if origin is not None:
+            headers["Origin"] = origin
         req = urllib.request.Request(
             self.url("/api/rate"),
             data=json.dumps(obj).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -227,13 +289,59 @@ class TestHTTP(unittest.TestCase):
         self.assertIn("3 cards", body)
 
     def test_brief_page_injected(self):
-        status, body = self.get(f"/brief/{RUN_ID}")
-        self.assertEqual(status, 200)
+        with urllib.request.urlopen(self.url(f"/brief/{RUN_ID}"), timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+            body = resp.read().decode("utf-8")
+            csp = resp.headers["Content-Security-Policy"]
         self.assertIn("window.__pulseState", body)
         self.assertIn("pulse-rate", body)
         self.assertIn("First card (tracked)", body)
+        match = re.search(r"script-src 'nonce-([^']+)'", csp)
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertGreaterEqual(body.count(f'nonce="{match.group(1)}"'), 2)
+        self.assertNotIn("script-src 'unsafe-inline'", csp)
+        self.assertIn("connect-src 'self'", csp)
         # The widget block lands before </body>.
         self.assertLess(body.index("window.__pulseState"), body.index("</body>"))
+
+    def test_historical_script_does_not_receive_nonce(self):
+        page = feedback_server.inject_widget(
+            "<html><body><script>alert('old')</script></body></html>",
+            RUN_ID,
+            [],
+            "test-nonce",
+        )
+        self.assertIn("<script>alert('old')</script>", page)
+        self.assertNotIn('<script nonce="test-nonce">alert', page)
+
+    def test_nonce_placeholder_in_hostile_script_is_not_activated(self):
+        page = feedback_server.inject_widget(
+            '<html><body><script nonce="__PI_PULSE_NONCE__">alert(1)</script></body></html>',
+            RUN_ID,
+            [],
+            "test-nonce",
+        )
+        self.assertIn('<script nonce="__PI_PULSE_NONCE__">alert(1)</script>', page)
+        self.assertNotIn('<script nonce="test-nonce">alert(1)</script>', page)
+
+    def test_historical_mathjax_loader_is_upgraded_to_local_fixed_block(self):
+        old_page = (
+            '<html><head><script defer src="https://cdn.jsdelivr.net/npm/'
+            'mathjax@3/es5/tex-mml-chtml.js"></script></head><body></body></html>'
+        )
+        page = feedback_server.inject_widget(old_page, RUN_ID, [], "test-nonce")
+        self.assertNotIn("cdn.jsdelivr.net", page)
+        self.assertIn('src="assets/mathjax/es5/tex-mml-chtml.js"', page)
+        self.assertIn('<script nonce="test-nonce">\nwindow.MathJax', page)
+
+    def test_mathjax_asset_route_serves_only_pinned_files(self):
+        with urllib.request.urlopen(
+            self.url("/brief/assets/mathjax/es5/tex-mml-chtml.js"), timeout=5
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get_content_type(), "text/javascript")
+            self.assertTrue(resp.read())
 
     def test_rate_round_trip(self):
         status, res = self.post_json(
@@ -251,6 +359,34 @@ class TestHTTP(unittest.TestCase):
         )
         # Reset so other tests see the pristine file regardless of order.
         (self.dir / f"{RUN_ID}.feedback.md").write_text(make_feedback_text())
+
+    def test_same_origin_post_succeeds(self):
+        status, res = self.post_json(
+            {"run_id": RUN_ID, "card": 1, "mark": "+"},
+            origin=f"http://127.0.0.1:{self.port}",
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(res["ok"])
+        (self.dir / f"{RUN_ID}.feedback.md").write_text(make_feedback_text())
+
+    def test_foreign_origin_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.post_json(
+                {"run_id": RUN_ID, "card": 1, "mark": "+"},
+                origin="https://attacker.example",
+            )
+        self.assertEqual(cm.exception.code, 403)
+
+    def test_non_json_content_type_is_refused(self):
+        req = urllib.request.Request(
+            self.url("/api/rate"),
+            data=b"run_id=x",
+            headers={"Content-Type": "text/plain"},
+            method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(cm.exception.code, 415)
 
     def test_bad_run_id_404(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:

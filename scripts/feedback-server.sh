@@ -13,13 +13,13 @@
 # in .env (flags win). Stdlib-only Python; makes zero model calls.
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
+export PI_PULSE_FEEDBACK_HOST PI_PULSE_FEEDBACK_PORT
 
 exec python3 sources/feedback_server.py "$@"

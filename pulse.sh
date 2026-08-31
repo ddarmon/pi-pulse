@@ -2,8 +2,8 @@
 # pi-pulse entrypoint. Runs the source-first pipeline:
 #   1. Collect inputs (notes / sesh / Anki) into .tmp/
 #   2. Distill via Pi headless (no tools): five-section memo
-#   3. Scout via Pi headless (web search/fetch enabled): probe brave-
-#      search per interest cluster, emit a structured signal sheet so
+#   3. Scout via Pi headless (only guarded search/fetch tools): probe
+#      Brave Search per interest cluster, emit a structured signal sheet so
 #      the plan stage picks from real evidence, not imagined sources.
 #      sources/filter_signals.py then drops signals whose normalized
 #      URL is in memory/seen_urls.jsonl or memory/unfetchable_urls.jsonl
@@ -14,11 +14,11 @@
 #      feedback digest (.tmp/feedback_recent.md) is attached as a
 #      ranking prior; a per-thread diversity cap in the prompt keeps
 #      it from concentrating the brief onto one thread.
-#   5. Expand via Pi headless (web search/fetch enabled), one pi call
-#      PER CARD in parallel (capped by PI_PULSE_EXPAND_PARALLEL): fetch
-#      the committed Source URL, write 250-400 words of prose
-#   6. Stitch theme + per-slot bodies into out/YYYY-MM-DD.md, aggregate
-#      drops to logs/YYYY-MM-DD/dropped.md, append URLs to seen ledger,
+#   5. Expand deterministically fetches each committed Source URL, then
+#      invokes a no-tools Pi call PER CARD in parallel (capped by
+#      PI_PULSE_EXPAND_PARALLEL) to write 250-400 words of prose.
+#   6. Stitch theme + per-slot bodies into out/YYYY-MM-DD-HHMM.md, aggregate
+#      drops to logs/YYYY-MM-DD-HHMM/dropped.md, append URLs to seen ledger,
 #      render HTML, copy to delivery dir.
 #
 # Card quotas are CAPS, not targets: on slow signal days the brief
@@ -36,15 +36,14 @@
 #
 # Per-run logs land in logs/${RUN_ID}/:
 #   distill.log.md  scout.log.md  plan.log.md  expand.log.md
-#   dropped.md  summary.md  *.err
+#   egress.log  egress.md  capabilities.jsonl  dropped.md  summary.md  *.err
 #
 # Configuration (env vars; see .env.example):
 #   PI_PULSE_NOTES_DIR        Directory tree of YYYY/MM/DD/*.md notes
 #   PI_PULSE_DELIVERY         Directory to copy the daily brief into
 #   PI_PULSE_ANKI_SEARCH      Path to anki_search.py (optional)
-#   PI_PULSE_BRAVE_DIR        brave-search skill dir, substituted into
-#                             {baseDir} in scout/expand prompts (default:
-#                             $HOME/.pi/agent/skills/brave-search)
+#   BRAVE_API_KEY             Brave Search key read directly from .env by
+#                             the guarded broker (never exported to Pi)
 #   PI_PULSE_RUN_ID           Override the run identifier (default:
 #                             current date-time as YYYY-MM-DD-HHMM)
 #   PI_PROVIDER               Pi provider (default: ollama)
@@ -64,17 +63,27 @@
 #   PI_PULSE_SCOUT_MAX_INTERESTS        Scout breadth cap         (default: 12)
 #   PI_PULSE_SCOUT_QUERIES_PER_INTEREST Scout queries per interest (default: 2)
 #   PI_PULSE_EXPAND_PARALLEL  Per-slot expand concurrency (default: 4)
+#   PI_PULSE_RETENTION_DAYS   Private history retention; 0 preserves all
+#                             history (default: 0; positive days opt in)
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")"
 
-# Auto-load .env if present (local-only config).
+# Tighten pre-existing sensitive files as well as newly created artifacts.
+# (umask affects creation only.) Missing files are normal on a fresh clone.
+for sensitive_file in .env memory/interests.md memory/feedback.jsonl; do
+  [[ -e "$sensitive_file" ]] && chmod 600 "$sensitive_file"
+done
+
+# Auto-load .env if present (local-only config). Do not blanket-export it:
+# model subprocesses must not inherit the Brave key or unrelated secrets.
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
+# These two values are consumed by deterministic collectors, not model tools.
+export PI_PULSE_NOTES_DIR PI_PULSE_ANKI_SEARCH
 
 DATE=$(date +%F)
 TIME=$(date +%H%M)
@@ -82,6 +91,7 @@ RUN_ID="${PI_PULSE_RUN_ID:-${DATE}-${TIME}}"
 OUT="out/${RUN_ID}.md"
 SESSION_DIR=".pulse-sessions/${RUN_ID}"
 LOG_DIR="logs/${RUN_ID}"
+PENDING_OUT="$LOG_DIR/brief.pending.md"
 export RUN_ID
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
 PI_MODEL="${PI_MODEL:-glm-5.2:cloud}"
@@ -91,9 +101,10 @@ PI_MODEL="${PI_MODEL:-glm-5.2:cloud}"
 # on the global default (today's behavior). The recommended setup is a
 # single model across all stages (e.g. glm-5.2:cloud); the override knobs
 # exist so any stage can be pointed at a different model without touching
-# the others. *_THINKING is empty by default (no --thinking flag passed);
-# it is effectively inert for reasoning models served over Ollama's
-# OpenAI-compat endpoint (pi cannot send a working "off" through it).
+# the others. *_THINKING is empty by default (no --thinking flag passed).
+# A level only reaches the provider when the repo-owned catalog below maps
+# it for that model; check_models.py fails the run if a stage asks for a
+# level the catalog would silently drop.
 DISTILL_PROVIDER="${PI_PULSE_DISTILL_PROVIDER:-$PI_PROVIDER}"
 DISTILL_MODEL="${PI_PULSE_DISTILL_MODEL:-$PI_MODEL}"
 DISTILL_THINKING="${PI_PULSE_DISTILL_THINKING:-}"
@@ -112,6 +123,28 @@ distill_think=(); [[ -n "$DISTILL_THINKING" ]] && distill_think=(--thinking "$DI
 scout_think=();   [[ -n "$SCOUT_THINKING"   ]] && scout_think=(--thinking "$SCOUT_THINKING")
 plan_think=();    [[ -n "$PLAN_THINKING"    ]] && plan_think=(--thinking "$PLAN_THINKING")
 
+# Repo-owned Pi model catalog. ~/.pi/agent/models.json is machine-global
+# and rewritten by `ollama launch pi` / `pi update`; a launcher-written
+# entry carries no thinkingLevelMap and no contextWindow, which silently
+# disabled SCOUT_THINKING=off for twelve days and left Pi assuming a 128k
+# window against a 1M model. Pointing PI_CODING_AGENT_DIR at a directory
+# this repo renders makes the pipeline immune to that file changing.
+# auth.json/trust.json/settings.json are symlinked to the real agent dir,
+# so credentials, project trust (an untrusted repo prompts on the first
+# tool call and stalls the run), and settings behave exactly as before.
+OLLAMA_BASE_URL="${PI_PULSE_OLLAMA_BASE_URL:-http://localhost:11434/v1}"
+PI_AGENT_DIR="$PWD/.pi-agent"
+mkdir -p "$PI_AGENT_DIR"
+sed "s|{{OLLAMA_BASE_URL}}|${OLLAMA_BASE_URL}|g" \
+  pi-agent/models.json.template > "$PI_AGENT_DIR/models.json"
+for shared in auth.json trust.json settings.json; do
+  real="$HOME/.pi/agent/$shared"
+  [[ -e "$real" ]] || continue
+  [[ -L "$PI_AGENT_DIR/$shared" ]] && rm -f "$PI_AGENT_DIR/$shared"
+  ln -sf "$real" "$PI_AGENT_DIR/$shared"
+done
+export PI_CODING_AGENT_DIR="$PI_AGENT_DIR"
+
 # Total attempts for each single-shot synthesis stage (distill/scout/plan).
 # glm-5.2 occasionally ends a synthesis turn inside its reasoning channel and
 # emits no answer text, leaving a 0-byte file; a fresh sample almost always
@@ -128,18 +161,16 @@ FOLLOWUP="${PI_PULSE_CARDS_FOLLOWUP:-1}"
 SCOUT_MAX_INTERESTS="${PI_PULSE_SCOUT_MAX_INTERESTS:-12}"
 SCOUT_QUERIES_PER_INTEREST="${PI_PULSE_SCOUT_QUERIES_PER_INTEREST:-2}"
 EXPAND_PARALLEL="${PI_PULSE_EXPAND_PARALLEL:-4}"
-# Directory of the brave-search skill. The scout and expand prompts call
-# `{baseDir}/search.js` and `{baseDir}/content.js`; we substitute {baseDir}
-# with this path so the model never has to discover it -- left unsubstituted,
-# the model resolves it ad hoc and has been observed running `find /` across
-# the whole filesystem (hours-long hang + macOS permission prompts).
-BRAVE_DIR="${PI_PULSE_BRAVE_DIR:-$HOME/.pi/agent/skills/brave-search}"
+RETENTION_DAYS="${PI_PULSE_RETENTION_DAYS:-0}"
+BRAVE_GUARD="$PWD/sources/brave-guard"
+SCOUT_EXTENSION="$BRAVE_GUARD/scout.ts"
 export TRACKED ADJACENT BRIDGE FOLLOWUP
 export SCOUT_MAX_INTERESTS SCOUT_QUERIES_PER_INTEREST EXPAND_PARALLEL
 
 mkdir -p .tmp .tmp/expand out "$LOG_DIR" \
   "$SESSION_DIR/distill" "$SESSION_DIR/scout" \
   "$SESSION_DIR/plan" "$SESSION_DIR/expand"
+export PI_PULSE_CAPABILITY_LOG="$PWD/$LOG_DIR/capabilities.jsonl"
 if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
   mkdir -p "$PI_PULSE_DELIVERY"
 fi
@@ -159,6 +190,10 @@ run_pi_retry() {
   [[ "$1" == "--" ]] && shift
   local n=1
   while (( n <= SYNTH_RETRIES )); do
+    if ! python3 sources/log_capability.py "$label" -- "$@"; then
+      log "ERROR: could not record ${label} capability flags"
+      return 1
+    fi
     "$@" > "$out" 2>"$err"
     if [[ -s "$out" ]]; then
       (( n > 1 )) && log "  ${label}: recovered on attempt ${n}/${SYNTH_RETRIES}"
@@ -185,6 +220,7 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 trap 'rm -rf "$LOCK_DIR"' EXIT
 echo "pid=$$ run_id=${RUN_ID} started=$(date -Iseconds)" > "$LOCK_DIR/info"
+: > "$PI_PULSE_CAPABILITY_LOG"
 
 # Find the newest .jsonl under a directory (recursive).
 newest_session() {
@@ -207,6 +243,22 @@ if [[ "$needs_ollama" == 1 ]]; then
   fi
 fi
 
+# 0a2. The catalog must actually describe every model this run uses. An
+# unknown id still runs (Pi passes it through as a custom id) but loses
+# its thinkingLevelMap and contextWindow, so a stage asking for
+# --thinking off silently reasons anyway. Fail before the first Pi call.
+if ! uv run sources/check_models.py "$PI_AGENT_DIR/models.json" \
+     --require distill "$DISTILL_PROVIDER" "$DISTILL_MODEL" "$DISTILL_THINKING" \
+     --require scout "$SCOUT_PROVIDER" "$SCOUT_MODEL" "$SCOUT_THINKING" \
+     --require plan "$PLAN_PROVIDER" "$PLAN_MODEL" "$PLAN_THINKING" \
+     --require expand "$EXPAND_PROVIDER" "$EXPAND_MODEL" "$EXPAND_THINKING" \
+     2>"$LOG_DIR/check-models.err"; then
+  cat "$LOG_DIR/check-models.err" >&2
+  log "ERROR: model catalog check failed; see $LOG_DIR/check-models.err"
+  exit 1
+fi
+log "model catalog: $(basename "$PI_AGENT_DIR")/models.json verified for 4 stages"
+
 # 0b. Ensure Anki is running so AnkiConnect can serve collect_anki.py.
 if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1; then
   log "AnkiConnect not reachable; launching Anki"
@@ -220,10 +272,11 @@ if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","versio
   fi
 fi
 
-# 0c. Sanity: the brave-search skill must exist where {baseDir} points, or
-# scout/expand silently return no signals. Non-fatal -- just surface it.
-if [[ ! -x "$BRAVE_DIR/search.js" ]]; then
-  log "WARN: brave-search skill not found at $BRAVE_DIR (set PI_PULSE_BRAVE_DIR); scout/expand may return nothing"
+# 0c. The in-repo broker is the only network surface exposed to scout.
+if [[ ! -x "$BRAVE_GUARD/search.js" || ! -x "$BRAVE_GUARD/content.js" \
+      || ! -f "$SCOUT_EXTENSION" ]]; then
+  log "ERROR: guarded search broker is incomplete at $BRAVE_GUARD"
+  exit 1
 fi
 
 # 1. Collect
@@ -295,10 +348,10 @@ fi
 log "distill stage: ${DISTILL_PROVIDER}/${DISTILL_MODEL}${DISTILL_THINKING:+ thinking=$DISTILL_THINKING}"
 distill_start=$SECONDS
 if ! run_pi_retry .tmp/interests_today.md "$LOG_DIR/distill.err" distill -- \
-   pi -p "$(cat prompts/distill_context.md)" \
+   env -u BRAVE_API_KEY pi -p "$(cat prompts/distill_context.md)" \
       --provider "$DISTILL_PROVIDER" --model "$DISTILL_MODEL" \
       ${distill_think[@]+"${distill_think[@]}"} \
-      --no-skills \
+      --no-tools --no-context-files --no-extensions --no-skills \
       --session-dir "$SESSION_DIR/distill" \
       @.tmp/chats_recent.md @.tmp/sesh_recent.md \
       @.tmp/anki_signals.md @memory/interests.md ; then
@@ -316,21 +369,39 @@ fi
 # per-run history to read (logs/ is gitignored and keyed on RUN_ID).
 cp .tmp/interests_today.md "$LOG_DIR/memo.md"
 
+# Web-facing stages receive only deterministic redacted copies. Keep the raw
+# memo/profile for sealed local synthesis, but remove emails, absolute home
+# paths, and key-shaped values from every attachment scout can inspect.
+log "scrubbing private markers from web-facing context"
+uv run sources/scrub_memo.py .tmp/interests_today.md \
+  > .tmp/interests_web.md 2> "$LOG_DIR/scrub-memo.err"
+uv run sources/scrub_memo.py memory/interests.md \
+  > .tmp/interests_profile_web.md 2> "$LOG_DIR/scrub-profile.err"
+uv run sources/scrub_memo.py .tmp/recent_pulses.md \
+  > .tmp/recent_pulses_web.md 2> "$LOG_DIR/scrub-recent-pulses.err"
+uv run sources/scrub_memo.py memory/seen_urls.jsonl \
+  > .tmp/seen_urls_web.jsonl 2> "$LOG_DIR/scrub-seen-urls.err"
+
 # 3. Scout (web search/fetch enabled): discover fresh primary sources
 # per interest cluster, emit structured signals.md.
 log "scout stage: ${SCOUT_PROVIDER}/${SCOUT_MODEL}${SCOUT_THINKING:+ thinking=$SCOUT_THINKING} (interests<=${SCOUT_MAX_INTERESTS} queries<=${SCOUT_QUERIES_PER_INTEREST})"
 scout_start=$SECONDS
 SCOUT_PROMPT=$(sed -e "s|{{SCOUT_MAX_INTERESTS}}|${SCOUT_MAX_INTERESTS}|g" \
                    -e "s|{{SCOUT_QUERIES_PER_INTEREST}}|${SCOUT_QUERIES_PER_INTEREST}|g" \
-                   -e "s|{baseDir}|${BRAVE_DIR}|g" \
                    prompts/scout_signals.md)
 if ! run_pi_retry .tmp/signals_raw.md "$LOG_DIR/scout.err" scout -- \
-   pi -p "$SCOUT_PROMPT" \
+   env -u BRAVE_API_KEY \
+      PI_PULSE_EGRESS_STAGE=scout \
+      PI_PULSE_EGRESS_LOG="$PWD/$LOG_DIR/egress.log" \
+      pi -p "$SCOUT_PROMPT" \
       --provider "$SCOUT_PROVIDER" --model "$SCOUT_MODEL" \
       ${scout_think[@]+"${scout_think[@]}"} \
+      --no-builtin-tools --tools search,fetch \
+      --extension "$SCOUT_EXTENSION" \
+      --no-context-files --no-extensions --no-skills \
       --session-dir "$SESSION_DIR/scout" \
-      @.tmp/interests_today.md @memory/interests.md \
-      @memory/seen_urls.jsonl @.tmp/recent_pulses.md ; then
+      @.tmp/interests_web.md @.tmp/interests_profile_web.md \
+      @.tmp/seen_urls_web.jsonl @.tmp/recent_pulses_web.md ; then
   log "ERROR: scout stage produced empty signals after $SYNTH_RETRIES attempts. See $LOG_DIR/scout.err"
   exit 1
 fi
@@ -388,10 +459,10 @@ PLAN_PROMPT=$(sed -e "s|{{TRACKED}}|${TRACKED}|g" \
                   -e "s|{{FOLLOWUP}}|${FOLLOWUP}|g" \
                   prompts/compose_plan.md)
 if ! run_pi_retry .tmp/plan.md "$LOG_DIR/plan.err" plan -- \
-   pi -p "$PLAN_PROMPT" \
+   env -u BRAVE_API_KEY pi -p "$PLAN_PROMPT" \
       --provider "$PLAN_PROVIDER" --model "$PLAN_MODEL" \
       ${plan_think[@]+"${plan_think[@]}"} \
-      --no-skills \
+      --no-tools --no-context-files --no-extensions --no-skills \
       --session-dir "$SESSION_DIR/plan" \
       @.tmp/signals.md @.tmp/interests_today.md \
       @.tmp/recent_pulses.md @.tmp/feedback_recent.md \
@@ -406,7 +477,7 @@ if [[ -n "$plan_session" ]]; then
     > "$LOG_DIR/plan.log.md"
 fi
 
-# 5. Expand (per-card parallel; web search/fetch enabled).
+# 5. Expand (per-card parallel; deterministic broker fetch, sealed Pi).
 log "splitting plan into per-slot files"
 rm -rf .tmp/expand
 mkdir -p .tmp/expand
@@ -427,14 +498,15 @@ log "expand stage: ${EXPAND_PROVIDER}/${EXPAND_MODEL}${EXPAND_THINKING:+ thinkin
 expand_start=$SECONDS
 export REPO_ROOT="$PWD"
 export EXPAND_DIR="$PWD/.tmp/expand"
-export SESSION_DIR EXPAND_PROVIDER EXPAND_MODEL EXPAND_THINKING BRAVE_DIR
+export SESSION_DIR EXPAND_PROVIDER EXPAND_MODEL EXPAND_THINKING
+export PI_PULSE_EGRESS_LOG="$PWD/$LOG_DIR/egress.log"
 awk '{print $1}' "$MANIFEST_FILE" \
   | xargs -n1 -P "$EXPAND_PARALLEL" "$PWD/sources/expand_slot.sh"
 log "expand finished in $((SECONDS - expand_start))s"
 
 # Per-slot session logs (best effort).
 : > "$LOG_DIR/expand.log.md"
-while IFS=$'\t' read -r slot_id _slot_tag; do
+while IFS=$'\t' read -r slot_id _slot_tag _slot_url; do
   sess=$(newest_session "$SESSION_DIR/expand/$slot_id")
   if [[ -n "$sess" ]]; then
     uv run sources/inspect_session.py "$sess" --label "expand[$slot_id]" \
@@ -449,7 +521,7 @@ done < "$MANIFEST_FILE"
 {
   cat .tmp/expand/theme.md
   echo
-  while IFS=$'\t' read -r slot_id _slot_tag; do
+  while IFS=$'\t' read -r slot_id _slot_tag _slot_url; do
     body=".tmp/expand/$slot_id/body.md"
     # A valid card body always starts with a `## ` heading. Anything
     # else -- empty, a DROPPED marker, or stray model narration like
@@ -461,7 +533,7 @@ done < "$MANIFEST_FILE"
       echo
     fi
   done < "$MANIFEST_FILE"
-} > "$OUT"
+} > "$PENDING_OUT"
 
 # 5c. Aggregate dropped slots into logs (never into the delivered brief).
 # Split-stage drops (plan slot whose Source URL failed verification
@@ -474,7 +546,7 @@ split_dropped=$(grep -c '^DROPPED ' "$LOG_DIR/split-plan.err" || true)
   if [[ "${split_dropped:-0}" -gt 0 ]]; then
     grep '^DROPPED ' "$LOG_DIR/split-plan.err" | sed 's/^DROPPED /- /'
   fi
-  while IFS=$'\t' read -r slot_id slot_tag; do
+  while IFS=$'\t' read -r slot_id slot_tag _slot_url; do
     body=".tmp/expand/$slot_id/body.md"
     err=".tmp/expand/$slot_id/err.log"
     if [[ ! -s "$body" ]] || [[ "$(head -c 3 "$body" 2>/dev/null)" != "## " ]] \
@@ -500,6 +572,57 @@ split_dropped=$(grep -c '^DROPPED ' "$LOG_DIR/split-plan.err" || true)
 } > "$LOG_DIR/dropped.md"
 log "expand drops: ${dropped_count}/${SLOT_COUNT} (split-stage drops: ${split_dropped:-0})"
 
+# 5d. Grounding census. A slot whose primary fetch failed still produces a
+# card from the search-snippet fallback: no drop, no error, but the prose
+# rests on a few snippet lines instead of the committed source. Surface it,
+# because "source-first" silently stops holding otherwise.
+grounding_fetch=0
+grounding_fallback=0
+fallback_slots=""
+while IFS=$'\t' read -r slot_id _slot_tag slot_url; do
+  body=".tmp/expand/$slot_id/body.md"
+  # Only delivered cards matter; dropped slots are already reported above.
+  [[ -s "$body" ]] && [[ "$(head -c 3 "$body" 2>/dev/null)" == "## " ]] \
+    && ! grep -q 'DROPPED slot=' "$body" || continue
+  if [[ "$(cat ".tmp/expand/$slot_id/grounding" 2>/dev/null)" == "search-fallback" ]]; then
+    grounding_fallback=$((grounding_fallback + 1))
+    fallback_slots+="- slot=$slot_id url=${slot_url}"$'\n'
+  else
+    grounding_fetch=$((grounding_fetch + 1))
+  fi
+done < "$MANIFEST_FILE"
+{
+  echo "# Grounding ${RUN_ID}"
+  echo
+  echo "- delivered cards from the committed primary source: ${grounding_fetch}"
+  echo "- delivered cards from the search-snippet fallback: ${grounding_fallback}"
+  if [[ -n "$fallback_slots" ]]; then
+    echo
+    echo "## Snippet-grounded cards"
+    echo
+    printf '%s' "$fallback_slots"
+  fi
+} > "$LOG_DIR/grounding.md"
+if [[ "$grounding_fallback" -gt 0 ]]; then
+  log "WARN: ${grounding_fallback}/$((grounding_fetch + grounding_fallback)) delivered cards are snippet-grounded, not source-grounded"
+  log "      See $LOG_DIR/grounding.md"
+else
+  log "grounding: all ${grounding_fetch} delivered cards from the committed primary source"
+fi
+
+# Reproduce the security audit mechanically on every run. The report records
+# code/prompt versions, actual session tool calls, and every guarded outbound
+# attempt. A violation fails closed before URL ledgers or delivery are changed,
+# while preserving all diagnostic artifacts.
+log "auditing stage capabilities and outbound arguments"
+audit_status="pass"
+if ! uv run sources/audit_egress.py "$RUN_ID" \
+     --manifest "$MANIFEST_FILE" --log-dir "$LOG_DIR" --session-dir "$SESSION_DIR" \
+     > "$LOG_DIR/egress.md" 2> "$LOG_DIR/audit-egress.err"; then
+  audit_status="FAIL"
+  log "ERROR: egress audit failed; see $LOG_DIR/egress.md"
+fi
+
 # 6. Aggregate summary
 {
   echo "# pi-pulse run ${RUN_ID}"
@@ -514,31 +637,45 @@ log "expand drops: ${dropped_count}/${SLOT_COUNT} (split-stage drops: ${split_dr
   echo "- signals: raw=${signals_raw} kept=${signals_kept} (ledger filter)"
   echo "- feedback digest: ${fb_census}"
   echo "- expand: slots=${SLOT_COUNT} parallel=${EXPAND_PARALLEL} drops=${dropped_count}"
+  echo "- grounding: ${grounding_fetch} from primary source, ${grounding_fallback} from search fallback (\`${LOG_DIR}/grounding.md\`)"
+  echo "- security audit: ${audit_status} (\`${LOG_DIR}/egress.md\`)"
   echo
   [[ -f "$LOG_DIR/distill.log.md" ]] && cat "$LOG_DIR/distill.log.md"
   [[ -f "$LOG_DIR/scout.log.md" ]]   && cat "$LOG_DIR/scout.log.md"
   [[ -f "$LOG_DIR/plan.log.md" ]]    && cat "$LOG_DIR/plan.log.md"
   [[ -f "$LOG_DIR/expand.log.md" ]]  && cat "$LOG_DIR/expand.log.md"
+  [[ -f "$LOG_DIR/egress.md" ]]      && cat "$LOG_DIR/egress.md"
 } > "$LOG_DIR/summary.md"
 
+if [[ "$audit_status" != "pass" ]]; then
+  log "ERROR: refusing delivery because a security invariant failed."
+  exit 1
+fi
+
 # 7. Bail if no card body landed (all slots dropped).
-if [[ ! -s "$OUT" ]] || [[ "$dropped_count" -ge "$SLOT_COUNT" ]]; then
+if [[ ! -s "$PENDING_OUT" ]] || [[ "$dropped_count" -ge "$SLOT_COUNT" ]]; then
   log "ERROR: every expand slot dropped; brief is empty."
   log "       See $LOG_DIR/dropped.md and $LOG_DIR/summary.md."
   exit 1
 fi
 
 # 8. Dedup + deliver
+mv "$PENDING_OUT" "$OUT"
 log "appending seen URLs"
 uv run sources/append_seen.py "$OUT" >> memory/seen_urls.jsonl
 
 # Record Source URLs of fetch-failed slots so filter_signals excludes
-# them from future runs. This runs only after the all-dropped bail
-# above: if every slot dropped, the cause is usually systemic (e.g. a
-# missing BRAVE_API_KEY), and recording those URLs would wrongly ban
-# good sources.
+# them from future runs. Slots that shipped snippet-grounded count as
+# fetch failures here: the card survived, but the committed source
+# still refused us, and that is invisible in the drop record. The
+# egress log supplies the host each fetch actually died at, which is
+# what blocks a publisher that keeps refusing new URLs. This runs only
+# after the all-dropped bail above: if every slot dropped, the cause is
+# usually systemic (e.g. a missing BRAVE_API_KEY), and recording those
+# URLs would wrongly ban good sources.
 log "recording unfetchable URLs"
 uv run sources/append_unfetchable.py .tmp/expand \
+  --egress-log "$LOG_DIR/egress.log" \
   2>"$LOG_DIR/append-unfetchable.err" \
   >> memory/unfetchable_urls.jsonl
 
@@ -565,10 +702,28 @@ if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
   cp "$OUT" "$PI_PULSE_DELIVERY/${RUN_ID}.md"
   if [[ -n "$OUT_HTML" && -f "$OUT_HTML" ]]; then
     cp "$OUT_HTML" "$PI_PULSE_DELIVERY/${RUN_ID}.html"
+    if [[ -d out/assets/mathjax ]]; then
+      mkdir -p "$PI_PULSE_DELIVERY/assets"
+      cp -R out/assets/mathjax "$PI_PULSE_DELIVERY/assets/"
+    fi
   fi
   if [[ -n "$FEEDBACK" && -f "$FEEDBACK" ]]; then
     cp "$FEEDBACK" "$PI_PULSE_DELIVERY/${RUN_ID}.feedback.md"
   fi
+fi
+
+# Private model transcripts and per-run memos/logs are useful for debugging,
+# but should not accumulate forever. Pruning is constrained to date-shaped
+# children under these two roots; delivered briefs remain untouched.
+if [[ "$RETENTION_DAYS" == 0 ]]; then
+  log "retention pruning disabled; preserving full run history"
+elif [[ "$RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]]; then
+  log "pruning private run history older than ${RETENTION_DAYS}d"
+  uv run sources/prune_history.py --days "$RETENTION_DAYS" --exclude "$RUN_ID" \
+    > "$LOG_DIR/retention.log" 2>&1 \
+    || log "WARN: retention prune failed; see $LOG_DIR/retention.log"
+else
+  log "WARN: invalid PI_PULSE_RETENTION_DAYS=$RETENTION_DAYS; preserving history"
 fi
 
 log "done: $OUT"

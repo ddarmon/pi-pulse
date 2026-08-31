@@ -13,10 +13,12 @@ Writes:
                           (tag)` heading + dash-prefixed fields).
 
 Emits a newline-separated manifest on stdout:
-  NN<TAB>tag
+  NN<TAB>tag<TAB>source-url
 
-where NN is the zero-padded slot id and tag is the card category
-(`tracked`, `adjacent`, `bridge`, or `follow-up of STEM`).
+where NN is the zero-padded slot id, tag is the card category
+(`tracked`, `adjacent`, `bridge`, or `follow-up of STEM`), and source-url
+is the URL parsed from the already-verified plan slot. Carrying the URL in
+the manifest keeps the expand shell from re-parsing model-authored markdown.
 The pipeline iterates this manifest to launch per-slot pi sessions.
 
 When --signals is given, each slot's `Source URL:` is verified against
@@ -37,6 +39,8 @@ import sys
 from pathlib import Path
 
 from append_seen import normalize
+from privacy import find_private_markers, redact_text
+from url_policy import UrlPolicyError, validate_public_url
 
 CARD_RE = re.compile(r"^## Card (\d+) \((.+)\)\s*$")
 PLAN_DATE_RE = re.compile(r"^# Plan (\d{4}-\d{2}-\d{2})\s*$")
@@ -150,15 +154,35 @@ def main() -> int:
 
     written = 0
     for slot_id, tag, body in slots:
+        # Bind the URL before the optional verification branch so the
+        # manifest shape is stable even when split_plan is used manually
+        # without --signals.
+        url = slot_source_url(body) or ""
+        if not url:
+            print(
+                f"DROPPED slot={slot_id} tag={tag} "
+                "reason=no Source URL line in plan slot",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            validate_public_url(url)
+        except UrlPolicyError as exc:
+            print(
+                f"DROPPED slot={slot_id} tag={tag} "
+                f"reason=invalid Source URL ({exc})",
+                file=sys.stderr,
+            )
+            continue
+        private_markers = find_private_markers(url)
+        if private_markers:
+            print(
+                f"DROPPED slot={slot_id} tag={tag} "
+                f"reason=private marker in Source URL ({','.join(private_markers)})",
+                file=sys.stderr,
+            )
+            continue
         if allowed is not None:
-            url = slot_source_url(body)
-            if url is None:
-                print(
-                    f"DROPPED slot={slot_id} tag={tag} "
-                    "reason=no Source URL line in plan slot",
-                    file=sys.stderr,
-                )
-                continue
             if normalize(url) not in allowed:
                 print(
                     f"DROPPED slot={slot_id} tag={tag} "
@@ -169,8 +193,15 @@ def main() -> int:
         slot_dir = args.out_dir / slot_id
         slot_dir.mkdir(parents=True, exist_ok=True)
         trimmed = "\n".join(body).rstrip() + "\n"
-        (slot_dir / "slot.md").write_text(trimmed)
-        sys.stdout.write(f"{slot_id}\t{tag}\n")
+        # The plan is sealed, but its rationale can echo private strings from
+        # the raw memo. Scrub the slot itself before it enters web-derived
+        # expand context; the verified URL travels separately in the manifest.
+        scrubbed, redactions = redact_text(trimmed)
+        if redactions:
+            detail = ",".join(f"{key}={value}" for key, value in sorted(redactions.items()))
+            print(f"# split_plan: slot={slot_id} redacted {detail}", file=sys.stderr)
+        (slot_dir / "slot.md").write_text(scrubbed)
+        sys.stdout.write(f"{slot_id}\t{tag}\t{url}\n")
         written += 1
 
     print(

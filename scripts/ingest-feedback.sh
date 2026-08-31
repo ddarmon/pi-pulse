@@ -25,13 +25,12 @@
 # This makes zero model calls -- it is pure local bookkeeping.
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
 
 # Cap each digest section for the daily plan-stage prior (0 = unlimited).

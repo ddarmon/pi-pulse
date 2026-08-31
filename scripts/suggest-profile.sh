@@ -16,16 +16,33 @@
 # they do not feed tomorrow's distill via sesh).
 
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
 
 if [[ -f .env ]]; then
-  set -a
   # shellcheck disable=SC1091
   source .env
-  set +a
 fi
 
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
+
+# Same repo-owned Pi catalog pulse.sh uses, for the same reason: the
+# machine-global ~/.pi/agent/models.json is rewritten by `ollama launch
+# pi` and loses every model's thinkingLevelMap and contextWindow. Render
+# it here too so this stage does not silently drift from the pipeline.
+OLLAMA_BASE_URL="${PI_PULSE_OLLAMA_BASE_URL:-http://localhost:11434/v1}"
+PI_AGENT_DIR="$PWD/.pi-agent"
+mkdir -p "$PI_AGENT_DIR"
+sed "s|{{OLLAMA_BASE_URL}}|${OLLAMA_BASE_URL}|g" \
+  pi-agent/models.json.template > "$PI_AGENT_DIR/models.json"
+for shared in auth.json trust.json settings.json; do
+  real="$HOME/.pi/agent/$shared"
+  [[ -e "$real" ]] || continue
+  [[ -L "$PI_AGENT_DIR/$shared" ]] && rm -f "$PI_AGENT_DIR/$shared"
+  ln -sf "$real" "$PI_AGENT_DIR/$shared"
+done
+export PI_CODING_AGENT_DIR="$PI_AGENT_DIR"
+
 # This stage deliberately does NOT use the pipeline's kimi-k2.6:cloud.
 # That model emits ~72k chars of inline chain-of-thought on this
 # evaluative task regardless of --thinking (off only suppresses it on
@@ -68,10 +85,10 @@ PROMPT=$(sed -e "s|{{DAYS}}|${DAYS}|g" "$PROMPT_FILE")
 think_args=()
 [[ -n "$THINKING" ]] && think_args=(--thinking "$THINKING")
 echo "[suggest] launching pi (${PI_PROVIDER}/${SUGGEST_MODEL}${THINKING:+, thinking=$THINKING})"
-pi -p "$PROMPT" \
+env -u BRAVE_API_KEY pi -p "$PROMPT" \
    --provider "$PI_PROVIDER" --model "$SUGGEST_MODEL" \
    ${think_args[@]+"${think_args[@]}"} \
-   --no-skills \
+   --no-tools --no-context-files --no-extensions --no-skills \
    --session-dir "$SESSION_DIR" \
    @"$PROFILE" @.tmp/suggest_input.md \
    > "$OUT"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -169,8 +170,6 @@ class RenderIntegrationTests(unittest.TestCase):
 
     def _render(self, md: str) -> str:
         # render() reads/writes files; drive it via a temp dir.
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / "brief.md"
             dst = Path(d) / "brief.html"
@@ -218,7 +217,8 @@ class RenderIntegrationTests(unittest.TestCase):
         self.assertIn("S_{\\text{token}}", html_doc)
         self.assertIn("\\frac{1}{2}", html_doc)
         # (c) MathJax loaded (math present) but config has no bare `$`.
-        self.assertIn("cdn.jsdelivr.net/npm/mathjax", html_doc)
+        self.assertIn("assets/mathjax/es5/tex-mml-chtml.js", html_doc)
+        self.assertNotIn("cdn.jsdelivr.net", html_doc)
         self.assertNotIn("['$', '$']", html_doc)
 
     def test_wrap_injects_mathjax_only_when_math_present(self) -> None:
@@ -226,6 +226,95 @@ class RenderIntegrationTests(unittest.TestCase):
         self.assertIn("MathJax", with_math)
         without = render_html.wrap("<p>x</p>", "t", with_mathjax=False)
         self.assertNotIn("MathJax", without)
+
+    def test_math_render_copies_verified_local_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "brief.md"
+            dst = Path(d) / "brief.html"
+            src.write_text("# Brief\n\n$$x^2$$\n", encoding="utf-8")
+            self.assertEqual(render_html.render_file(src, dst), 0)
+            asset = Path(d) / "assets" / "mathjax" / "es5" / "tex-mml-chtml.js"
+            self.assertTrue(asset.is_file())
+            self.assertIn(render_html.MATHJAX_NONCE_TOKEN, dst.read_text())
+
+
+class HtmlSanitizerTests(unittest.TestCase):
+    def test_markdown_image_output_is_removed(self) -> None:
+        dirty = '<p>before <img src="https://attacker.example/pixel.png" alt="x"> after</p>'
+        clean = render_html.sanitize_html(dirty)
+        self.assertNotIn("<img", clean)
+        self.assertNotIn("attacker.example", clean)
+        self.assertIn("before", clean)
+        self.assertIn("after", clean)
+
+    def test_script_and_contents_are_removed(self) -> None:
+        clean = render_html.sanitize_html("<p>safe</p><script>steal(secret)</script><p>end</p>")
+        self.assertNotIn("script", clean)
+        self.assertNotIn("steal", clean)
+        self.assertNotIn("secret", clean)
+        self.assertIn("safe", clean)
+        self.assertIn("end", clean)
+
+    def test_javascript_href_is_removed_but_link_text_survives(self) -> None:
+        clean = render_html.sanitize_html('<a href="javascript:alert(1)">read me</a>')
+        self.assertEqual(clean, "<a>read me</a>")
+
+    def test_control_obfuscated_javascript_href_is_removed(self) -> None:
+        clean = render_html.sanitize_html(
+            '<a href="\x00javascript:alert(1)">read me</a>'
+        )
+        self.assertEqual(clean, "<a>read me</a>")
+
+    def test_http_link_survives_and_event_attributes_do_not(self) -> None:
+        clean = render_html.sanitize_html(
+            '<a href="https://example.com/paper" onclick="steal()" style="display:none">paper</a>'
+        )
+        self.assertEqual(clean, '<a href="https://example.com/paper">paper</a>')
+
+    def test_unknown_tag_keeps_text_and_display_math_delimiters(self) -> None:
+        clean = render_html.sanitize_html('<span class="math display">\\[x^2\\]</span>')
+        self.assertEqual(clean, "\\[x^2\\]")
+
+    def test_protocol_relative_href_is_removed(self) -> None:
+        clean = render_html.sanitize_html('<a href="//attacker.example/x">go</a>')
+        self.assertEqual(clean, "<a>go</a>")
+
+    def test_relative_href_survives(self) -> None:
+        clean = render_html.sanitize_html('<a href="/brief/2026-08-08-0500">go</a>')
+        self.assertEqual(clean, '<a href="/brief/2026-08-08-0500">go</a>')
+
+    def test_restored_math_is_escaped_not_parsed_as_markup(self) -> None:
+        # The markdown-fallback path splices protected TeX back into the
+        # rendered HTML; a `<` inside math must stay text (not truncate the
+        # paragraph) and markup inside math must not become live elements.
+        spans = [
+            ("zzPIMATH0zz", "\\[E = \\frac{a<b}{2}\\]"),
+            ("zzPIMATH1zz", '\\(<a href="https://evil.example">x</a>\\)'),
+        ]
+        body = "<p>zzPIMATH0zz and zzPIMATH1zz</p>"
+        clean = render_html.sanitize_html(render_html._restore_math(body, spans))
+        self.assertIn("\\[E = \\frac{a&lt;b}{2}\\]", clean)
+        self.assertNotIn("<a", clean)
+        self.assertNotIn("evil.example</a>", clean)
+        self.assertTrue(clean.endswith("</p>"))
+
+    @unittest.skipUnless(shutil.which("pandoc"), "pandoc not installed")
+    def test_full_markdown_render_drops_image_and_raw_html(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "brief.md"
+            dst = Path(d) / "brief.html"
+            src.write_text(
+                "# Brief\n\n![x](https://attacker.example/p.png)\n\n"
+                "<script>forged feedback</script>\n\n"
+                "[source](https://example.com/paper)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(render_html.render_file(src, dst), 0)
+            output = dst.read_text(encoding="utf-8")
+        self.assertNotIn("<img", output)
+        self.assertNotIn("attacker.example", output)
+        self.assertNotIn("forged feedback", output)
+        self.assertIn('<a href="https://example.com/paper">source</a>', output)
 
 
 if __name__ == "__main__":

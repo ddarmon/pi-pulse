@@ -13,16 +13,16 @@ of the week" roundup, skip it.
 
 Inputs (already attached):
 
--   `.tmp/interests_today.md` -- today's memo with five sections:
+-   `.tmp/interests_web.md` -- today's redacted memo with five sections:
     Active threads, Open questions, Persistent interests, Study
     reinforcement, Avoid.
--   `memory/interests.md` -- the user's durable profile (role,
+-   `.tmp/interests_profile_web.md` -- the redacted durable profile (role,
     projects, long-running topics). Use this to surface
     PROFILE-ADJACENT signals: things the user would care about but did
     NOT name in the memo today.
--   `memory/seen_urls.jsonl` -- URLs already surfaced in past briefs.
+-   `.tmp/seen_urls_web.jsonl` -- redacted URLs already surfaced in past briefs.
     Treat any URL whose normalized form appears here as ineligible.
--   `.tmp/recent_pulses.md` -- titles + first-sentence excerpts of
+-   `.tmp/recent_pulses_web.md` -- redacted titles + first-sentence excerpts of
     cards shipped in recent briefs. A signal must add something the
     user hasn't already seen on this topic: a different paper, a new
     release, a different angle (a deep-dive vs the announcement), or
@@ -40,21 +40,18 @@ Budgets (fixed for this run):
 -   **Queries per interest: at most {{SCOUT_QUERIES_PER_INTEREST}}.**
     A second query is justified only if the first returned no
     acceptable signal.
--   **Content fetches: rare.** Use a `content.js` fetch only when the
-    `search.js` result's title and snippet are insufficient to write a
+-   **Content fetches: rare.** Use the `fetch` tool only when the
+    `search` result's title and snippet are insufficient to write a
     one-sentence gloss with a published date. Most signals should be
     extractable from the search result alone.
 
 Process. For each prioritized interest, in order:
 
 1.  Form one focused web query naming the specific technique, library,
-    paper, release, or named entity. NO `site:` filters. Run it via
-    Bash:
-    `{baseDir}/search.js "<your query>" -n 5`
-    Use the `brave-search` skill
-    (https://github.com/badlogic/pi-skills/tree/main/brave-search) --
-    do NOT use the built-in `web_search` tool; its results are
-    unbounded and have overflowed context before.
+    paper, release, or named entity. NO `site:` filters. Call the
+    `search` tool with that query and `count: 5`. It is the only search
+    capability available: it length-caps and logs the query and returns
+    bounded Brave Search results.
 2.  Inspect the result list. A result is an acceptable signal if all
     of the following hold:
     -   **Relevance.** The content meaningfully connects to the
@@ -100,16 +97,17 @@ Process. For each prioritized interest, in order:
     qualifier, swap a synonym, narrow to a project name). If that
     also fails, emit nothing for this interest and move on.
 4.  If a single acceptable result has a vague title or snippet that
-    you cannot summarise in one sentence, run a single `content.js`
-    fetch on its URL to extract a gloss. Otherwise do not fetch.
+    you cannot summarise in one sentence, call the `fetch` tool once on
+    its URL to extract a gloss. Otherwise do not fetch. The broker
+    rejects local/private destinations and revalidates every redirect.
 5.  Emit ONE signal entry per accepted result. Do not emit multiple
     signals per interest unless the second result genuinely covers
     different ground (e.g. a release note AND a companion blog post
     explaining the design); duplicates are noise.
 
-Search budget (STRICT): AT MOST {{SCOUT_QUERIES_PER_INTEREST}} `search.js`
+Search budget (STRICT): AT MOST {{SCOUT_QUERIES_PER_INTEREST}} `search`
 calls per interest, AT MOST {{SCOUT_MAX_INTERESTS}} interests in total.
-Content fetches: AT MOST one `content.js` per accepted signal, and only
+Content fetches: AT MOST one `fetch` per accepted signal, and only
 when necessary per step 4.
 
 Output exactly this markdown shape. No preamble. No closing sign-off.
@@ -168,8 +166,8 @@ Field rules:
     `tutorial`, `talk`, `personal-blog`, `news`. Coin a new label if
     none of these fit; plan stage uses this for diversity weighting,
     not as a hard filter.
--   **url**: a URL that actually exists. Use what `search.js` or
-    `content.js` returned verbatim when possible. Canonical project
+-   **url**: a URL that actually exists. Use what `search` or `fetch`
+    returned verbatim when possible. Canonical project
     URLs (`https://github.com/owner/repo`,
     `https://github.com/owner/repo/releases`,
     `https://pypi.org/project/<name>/`) are acceptable when a more
@@ -193,7 +191,7 @@ Field rules:
 Hard rules:
 
 -   Do NOT fabricate URLs, titles, or dates. Every field must be
-    grounded in a `search.js` result or `content.js` fetch you
+    grounded in a `search` result or `fetch` call you
     actually ran in this session. Citing a canonical project URL
     (repo root, `/releases` page, package registry page) you saw in
     a result list is fine; inventing a specific tag string or DOI
