@@ -146,9 +146,11 @@ done
 export PI_CODING_AGENT_DIR="$PI_AGENT_DIR"
 
 # Total attempts for each single-shot synthesis stage (distill/scout/plan).
-# glm-5.2 occasionally ends a synthesis turn inside its reasoning channel and
-# emits no answer text, leaving a 0-byte file; a fresh sample almost always
-# succeeds. See run_pi_retry below.
+# A reasoning model can end a synthesis turn inside its reasoning channel and
+# emit no answer text, leaving a 0-byte file; a fresh sample almost always
+# succeeds. glm-5.2 did this on ~20% of heavy turns (it killed the 08-21 and
+# 08-30 runs outright); glm-5.3 has not been seen to, but the guard is cheap
+# and covers a swap back. See run_pi_retry below.
 SYNTH_RETRIES="${PI_PULSE_SYNTH_RETRIES:-3}"
 
 NOTES_SINCE="${PI_PULSE_NOTES_SINCE:-30}"
@@ -199,7 +201,7 @@ run_pi_retry() {
       (( n > 1 )) && log "  ${label}: recovered on attempt ${n}/${SYNTH_RETRIES}"
       return 0
     fi
-    log "  ${label}: EMPTY output on attempt ${n}/${SYNTH_RETRIES} (glm-5.2 thinking runaway); resampling"
+    log "  ${label}: EMPTY output on attempt ${n}/${SYNTH_RETRIES} (thinking runaway); resampling"
     (( n++ ))
   done
   return 1

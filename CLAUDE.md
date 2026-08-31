@@ -99,7 +99,7 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
 ## Cost and runtime awareness
 
 A full `./pulse.sh` run takes roughly 8--12 min and makes `3 + N` pi
-calls against `kimi-k2.6:cloud`, where N is the planned card count
+calls against `glm-5.3:cloud`, where N is the planned card count
 (default cap 8). Per-card expand calls run in parallel
 (`PI_PULSE_EXPAND_PARALLEL`, default 4), so wall time scales with
 `max(per-card)`, not the sum. Operating assumption: unlimited Ollama
@@ -126,34 +126,51 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 -   **Per-stage model selection.** Each stage (distill, scout, plan,
     expand) takes independent `PI_PULSE_<STAGE>_{MODEL,PROVIDER,THINKING}`
     overrides, each falling back to the global `PI_MODEL`/`PI_PROVIDER`.
-    As of ~2026-06-18 the local `.env` runs **all four stages on
-    `glm-5.2:cloud`** (top open-weight model as of June 2026). (Earlier the
-    pipeline split distill+plan onto `minimax-m3:cloud` and scout+expand on
-    `kimi-k2.6:cloud` because kimi saturated the harder synthesis prompts;
-    both entries remain in `models.json` as alternatives.)
--   **glm-5.2 thinking-runaway and the scout fix.** glm-5.2 is a reasoning
-    model and on a heavy synthesis turn it *intermittently* (~20%, measured
-    2026-06-27/28) ends inside its `thinking` channel and emits **no answer
-    text** -- `stopReason=stop`, `usage.output=0` -- so the stage writes
-    0 bytes and the run aborts. It is stochastic: a fresh sample almost
-    always succeeds. Two mitigations are in place:
-    1.  **Scout runs with thinking OFF** (`PI_PULSE_SCOUT_THINKING=off`),
-        which makes it **stall-proof by construction** (no reasoning channel
-        to run away in) and, in a live test (2026-06-28), also *faster* with
-        an equal-or-fuller signal sheet. This REQUIRES a `thinkingLevelMap`
-        on the `glm-5.2:cloud` entry, which now lives in the **repo-owned**
-        catalog `pi-agent/models.json.template` (see below), not in
-        `~/.pi/agent/models.json`.
-        Without it, pi's bare `--thinking off` **omits** the field over the
-        OpenAI-compat endpoint and the model still thinks (it does NOT
-        disable). With it, pi sends `reasoning_effort=none`. Measured
-        2026-08-26 on identical prompts: with the map, 0 chars of thinking;
-        without it, 226. `--thinking low` still thinks (231 chars), so the
-        map is a real switch, not blanket suppression.
-    2.  **distill/plan keep thinking on** (ranking/synthesis benefit from it)
-        but are wrapped by `run_pi_retry` in `pulse.sh`, which resamples on
-        0-byte output up to `PI_PULSE_SYNTH_RETRIES` (default 3). scout is
-        wrapped too as belt-and-suspenders.
+    As of 2026-08-30 the local `.env` runs **all four stages on
+    `glm-5.3:cloud`** (top open-weight model as of August 2026) with
+    explicit thinking levels: scout/expand `low`, distill/plan `high`.
+    Set them explicitly -- pi hardcodes `DEFAULT_THINKING_LEVEL = medium`
+    whenever `--provider/--model` are passed without `--thinking`, so an
+    unset stage is not an unset level. (Earlier: all four on
+    `glm-5.2:cloud` from ~2026-06-18; before that distill+plan on
+    `minimax-m3:cloud` and scout+expand on `kimi-k2.6:cloud` because kimi
+    saturated the harder synthesis prompts. All three remain in the
+    catalog as alternatives.)
+-   **GLM-5.3 cannot stop thinking, and asking it to corrupts the stage.**
+    `reasoning_effort` accepts only `low|high|max` (default `max`); Z.ai's
+    API answers 400 (code 1210) on anything else. Ollama does *not* reject
+    `none` -- it stops opening the reasoning channel and the model's
+    monologue is emitted as ordinary **answer text**. Measured 2026-08-30:
+    scout with `--thinking off` (mapped to `none`) wrote **45,149 bytes of
+    chain-of-thought** to stdout where a 2.4 KB signal sheet belongs; the
+    same call at `low` produced a clean sheet in 10.3s with thinking
+    properly separated. The corrupt output is *non-empty*, so
+    `run_pi_retry`'s 0-byte guard passes it straight through to the ledger
+    filter. Mitigations:
+    1.  The catalog maps `off` and `minimal` to **null** on the
+        `glm-5.3:cloud` entry, so `check_models.py` aborts before the first
+        pi call naming the stage that asked. Never map `off` to `none` for
+        this model.
+    2.  `medium` is mapped to `high` rather than left out: an unmapped
+        level is sent verbatim and glm-5.3's chat template falls back to
+        `max`. On one 167.8k-token distill input, low 24.7s / high 48.4s /
+        max 143.7s.
+    3.  distill/scout/plan stay wrapped by `run_pi_retry` in `pulse.sh`,
+        which resamples on 0-byte output up to `PI_PULSE_SYNTH_RETRIES`
+        (default 3). glm-5.3 showed no empty completion in ~50 calls, but
+        the guard costs nothing and still covers a model swap back.
+-   **Why glm-5.2 was replaced (2026-08-30).** glm-5.2 is a reasoning model
+    that *intermittently* (~20%, measured 2026-06-27/28) ends a heavy
+    synthesis turn inside its `thinking` channel and emits **no answer
+    text** -- `stopReason=stop`, `usage.output=0` -- so the stage writes 0
+    bytes and the run aborts. Two of the twelve runs before the swap died
+    that way (`2026-08-21`, `2026-08-30`), each burning three ~61-minute
+    attempts. On glm-5.2 the fix was `PI_PULSE_SCOUT_THINKING=off`, which
+    made scout stall-proof by construction and is verifiable in the run
+    record: scout sessions on 08-27/28/29 carry **zero** thinking blocks.
+    That property does not survive the move to glm-5.3 -- see above. The
+    `glm-5.2:cloud` entry (with its working `off -> none` map) stays in the
+    catalog, so reverting is one `.env` line per stage.
 -   **The Pi model catalog is repo-owned.** `pulse.sh` and
     `scripts/suggest-profile.sh` render `pi-agent/models.json.template`
     (double-brace `{{OLLAMA_BASE_URL}}`, from `PI_PULSE_OLLAMA_BASE_URL`)
@@ -389,7 +406,7 @@ There is no cron yet -- run it weekly when convenient.
 -   `pulse.sh` exits 1 if distill, scout, or plan produces 0-byte
     output *after `PI_PULSE_SYNTH_RETRIES` attempts* (default 3; each
     stage is wrapped by `run_pi_retry`, which resamples on empty output
-    -- see the glm-5.2 thinking-runaway note above), if the ledger
+    -- see the thinking-level notes above), if the ledger
     filter drops every scout signal, if the egress audit fails, or if every
     expand slot drops.
     Logs are preserved. A retried stage logs
