@@ -2,7 +2,10 @@
 
 Personalized daily Pulse brief built on Pi + Ollama Cloud. Inspired by
 OpenAI's Pulse; every piece is local and replaceable. The repo is
-private at github.com/ddarmon/pi-pulse.
+**public** at github.com/ddarmon/pi-pulse -- which is why the
+no-personal-data convention below is a hard rule and not a preference:
+anything committed here is world-readable, and a force-push does not
+take it back (GitHub keeps PR-referenced commits fetchable by SHA).
 
 ## Pipeline
 
@@ -113,7 +116,11 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
     `prompts/compose_plan.md` for the in-file convention. Substitute
     placeholders in pulse.sh with `sed`, not `envsubst`. The launchd
     template uses the same double-brace convention.
--   **No personal data in committed files.** `memory/interests.md`,
+-   **No personal data in committed files.** The repo is public, and
+    machine names, tailnet addresses, local directory taxonomies, and
+    deployment particulars all count -- keep them in gitignored local
+    files and commit only the `.example` template. Deployment state
+    belongs in `DEPLOYMENT.local.md`, not in this file. `memory/interests.md`,
     `memory/seen_urls.jsonl`, `memory/unfetchable_urls.jsonl`,
     `memory/feedback.jsonl`, `out/`, `logs/`, `.pulse-sessions/`,
     `.env`, and `memory/interests.md.local` are all gitignored. The
@@ -303,11 +310,12 @@ and a nonce-based CSP on brief pages. Only pinned local MathJax assets
 are served from a fixed asset route. The server only ever writes
 `out/*.feedback.md`; ingest sweeps them on the next run as usual.
 
-**Deployment state (this machine):** the server is INSTALLED and
-running under launchd as `com.user.pi-pulse-feedback` (plist at
-`~/Library/LaunchAgents/`, TCC-safe deployment installed 2026-07-20),
+**Deploying it.** The server runs under launchd as
+`com.user.pi-pulse-feedback` (plist in `~/Library/LaunchAgents/`),
 bound to the Tailscale IP via `PI_PULSE_FEEDBACK_HOST=tailscale` in
-`.env`. `scripts/install-feedback-server.sh` installs a stable native
+`.env`. Run it on the same machine as the scheduled pulse: ingest only
+sweeps `out/*.feedback.md` in the checkout that generated the brief, so
+ratings written anywhere else never reach the ledger. `scripts/install-feedback-server.sh` installs a stable native
 wrapper at `~/Applications/Pi Pulse Feedback.app`; that app has the
 Documents-folder consent needed to reach this checkout after a cold
 launch. The LaunchAgent must point at the native wrapper and keep its
@@ -321,8 +329,8 @@ launchd job holds the port (EADDRINUSE crash-loop). Logs:
 `~/Library/Logs/pi-pulse/feedback-server.{out,err}.log`. User-facing
 setup steps live in README.md ("Rate cards from your phone").
 
-**Scheduled pulse deployment (this machine):** the daily 05:00 run is
-installed via `scripts/install-pulse-agent.sh` as
+**Scheduling it.** The daily run is installed via
+`scripts/install-pulse-agent.sh` as
 `com.user.pi-pulse`, pointing at the native wrapper
 `~/Applications/Pi Pulse.app` (same TCC pattern as the feedback
 server). The wrapper is required: pointing launchd directly at
@@ -332,7 +340,31 @@ the run. Job stdout/stderr: `~/Library/Logs/pi-pulse/pulse.{out,err}.log`
 (per-run logs stay in `logs/<RUN_ID>/`). The LaunchAgent bakes in the
 installing shell's PATH -- re-run the installer after node/uv/pi path
 changes. `--rebuild-app` recompiles the wrapper, which changes its code
-identity and re-prompts for Documents consent.
+identity and re-prompts for Documents consent. Install from an
+interactive login shell, never `ssh <host> './scripts/install-pulse-agent.sh'`:
+a non-interactive login shell skips `.zshrc`, so a PATH entry added
+there (a uv tool dir, say) is missing from the baked PATH and the job
+dies at step 0a2 on `uv run check_models.py`.
+
+**Running on a different machine than you code on.** The pipeline is
+happiest on an always-on host, but the sessions worth briefing on are
+made wherever you actually work. Point `PI_PULSE_SESH_ARCHIVE_ROOT` (or
+`PI_PULSE_SESH_AGGREGATION_ROOT`) at a shared session tree so the
+scheduled run reads those machines rather than only its own -- see
+`.env.example`. Two host-level preconditions are easy to miss and fail
+quietly:
+
+-   `~/.pi/agent/trust.json` must list the checkout path. An untrusted
+    repo makes pi prompt on its first tool call, which stalls the run
+    with no error.
+-   Anki must be synced before collect. On a host where the reviews do
+    not happen, an unsynced collection reports no study activity at
+    all, and the bridge slot -- which has a minimum rather than a cap --
+    starves. `pulse.sh` step 0b2 syncs first, best-effort.
+
+Which machine currently runs what is deployment state, not repo
+knowledge: record it in `DEPLOYMENT.local.md` (gitignored, see
+`DEPLOYMENT.example.md`).
 
 ## Profile-suggest (weekly, manual)
 

@@ -16,3 +16,4 @@ __pycache__/
 SCHEDULED_RUNS.md
 .pi-agent/
 
+DEPLOYMENT.local.md
