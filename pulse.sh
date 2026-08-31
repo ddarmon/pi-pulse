@@ -54,6 +54,13 @@
 #                             <STAGE> in DISTILL, SCOUT, PLAN, EXPAND
 #   PI_PULSE_NOTES_SINCE      Days of notes history (default: 30)
 #   PI_PULSE_SESH_SINCE       Days of sesh history  (default: 7)
+#   PI_PULSE_SESH_AGGREGATION_ROOT  Directory of per-host mirrored homes to
+#                             read sessions from (default: unset, i.e. this
+#                             machine's own sessions)
+#   PI_PULSE_SESH_ARCHIVE_ROOT  Same, for an agent archive whose layout needs
+#                             a shim (mutually exclusive with the above)
+#   PI_PULSE_SESH_HOSTS       Comma-separated hosts to include
+#                             (default: every host available)
 #   PI_PULSE_HISTORY_DAYS     Days of prior briefs for dedup (default: 7)
 #   PI_PULSE_CARDS_TRACKED    Tracked card cap     (default: 5)
 #   PI_PULSE_CARDS_ADJACENT   Adjacent card cap    (default: 2)
@@ -155,6 +162,34 @@ SYNTH_RETRIES="${PI_PULSE_SYNTH_RETRIES:-3}"
 
 NOTES_SINCE="${PI_PULSE_NOTES_SINCE:-30}"
 SESH_SINCE="${PI_PULSE_SESH_SINCE:-7}"
+# Cross-machine session input. Both unset reproduces the single-machine
+# behaviour: collect_sesh.py reads this host's own ~/.claude, ~/.codex and
+# ~/.pi. Point either at per-host session trees and an always-on box can brief
+# on work done from a laptop that is frequently offline.
+SESH_AGGREGATION_ROOT="${PI_PULSE_SESH_AGGREGATION_ROOT:-}"
+SESH_ARCHIVE_ROOT="${PI_PULSE_SESH_ARCHIVE_ROOT:-}"
+SESH_HOSTS="${PI_PULSE_SESH_HOSTS:-}"
+if [[ -n "$SESH_AGGREGATION_ROOT" && -n "$SESH_ARCHIVE_ROOT" ]]; then
+  echo "ERROR: set PI_PULSE_SESH_AGGREGATION_ROOT or PI_PULSE_SESH_ARCHIVE_ROOT, not both." >&2
+  exit 1
+fi
+SESH_MULTI_HOST="${SESH_AGGREGATION_ROOT:-$SESH_ARCHIVE_ROOT}"
+sesh_args=(--since "$SESH_SINCE" --exclude-cwd "$PWD")
+if [[ -n "$SESH_MULTI_HOST" ]]; then
+  if [[ -n "$SESH_AGGREGATION_ROOT" ]]; then
+    sesh_args+=(--aggregation-root "$SESH_AGGREGATION_ROOT")
+  else
+    sesh_args+=(--archive-root "$SESH_ARCHIVE_ROOT")
+  fi
+  # Comma-separated in .env for symmetry with the other list knobs; the
+  # collector takes one repeatable --host so an empty entry cannot become
+  # a host named "".
+  IFS=',' read -r -a _sesh_hosts <<< "$SESH_HOSTS"
+  for _host in "${_sesh_hosts[@]}"; do
+    _host="${_host// /}"
+    [[ -n "$_host" ]] && sesh_args+=(--host "$_host")
+  done
+fi
 HISTORY_DAYS="${PI_PULSE_HISTORY_DAYS:-7}"
 TRACKED="${PI_PULSE_CARDS_TRACKED:-5}"
 ADJACENT="${PI_PULSE_CARDS_ADJACENT:-2}"
@@ -274,6 +309,21 @@ if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","versio
   fi
 fi
 
+# 0b2. Pull the collection from AnkiWeb before reading it. collect_anki.py
+# asks for rated:7 / added:7 / tag:leech, so on a machine that is not where
+# the reviews happen a stale collection silently reports no study activity
+# at all -- and the bridge slot, which has a minimum rather than a cap, is
+# the one that starves. Best-effort: a sync failure is not worth an abort,
+# and the collector already degrades to an empty bundle.
+if curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1; then
+  if curl -sf --max-time 60 http://127.0.0.1:8765 \
+       -d '{"action":"sync","version":6}' >/dev/null 2>&1; then
+    log "anki: synced with AnkiWeb"
+  else
+    log "WARN: anki sync failed; study signals may be stale"
+  fi
+fi
+
 # 0c. The in-repo broker is the only network surface exposed to scout.
 if [[ ! -x "$BRAVE_GUARD/search.js" || ! -x "$BRAVE_GUARD/content.js" \
       || ! -f "$SCOUT_EXTENSION" ]]; then
@@ -284,8 +334,12 @@ fi
 # 1. Collect
 log "collecting notes (${NOTES_SINCE}d)"
 uv run sources/collect_obsidian.py --since "$NOTES_SINCE" > .tmp/chats_recent.md 2>"$LOG_DIR/collect-obsidian.err"
-log "collecting sesh sessions (${SESH_SINCE}d)"
-uv run sources/collect_sesh.py     --since "$SESH_SINCE" --exclude-cwd "$PWD" > .tmp/sesh_recent.md 2>"$LOG_DIR/collect-sesh.err"
+if [[ -n "$SESH_MULTI_HOST" ]]; then
+  log "collecting sesh sessions (${SESH_SINCE}d, hosts: ${SESH_HOSTS:-all available})"
+else
+  log "collecting sesh sessions (${SESH_SINCE}d, this machine)"
+fi
+uv run sources/collect_sesh.py "${sesh_args[@]}" > .tmp/sesh_recent.md 2>"$LOG_DIR/collect-sesh.err"
 log "collecting anki signals"
 uv run sources/collect_anki.py                            > .tmp/anki_signals.md 2>"$LOG_DIR/collect-anki.err" || true
 
