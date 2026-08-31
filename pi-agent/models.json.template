@@ -17,6 +17,35 @@
       "baseUrl": "{{OLLAMA_BASE_URL}}",
       "models": [
         {
+          "id": "glm-5.3:cloud",
+          "contextWindow": 1048576,
+          "reasoning": true,
+          "input": ["text"],
+          "_comment": [
+            "GLM-5.3 CANNOT disable thinking: reasoning_effort accepts only",
+            "low|high|max (default max) and Z.ai's API answers 400 (code 1210)",
+            "on anything else. Ollama does not reject `none` -- it stops opening",
+            "the reasoning channel and the model's monologue is emitted as answer",
+            "text instead. Measured 2026-08-30: scout with `off` mapped to `none`",
+            "wrote 45,149 bytes of chain-of-thought to .tmp/signals_raw.md where a",
+            "2.4 KB signal sheet belongs, and it is non-empty so run_pi_retry's",
+            "0-byte guard passes it straight through. Hence off/minimal -> null:",
+            "check_models.py then aborts the run naming the stage instead.",
+            "`medium` must stay mapped because pi hardcodes DEFAULT_THINKING_LEVEL",
+            "= medium when --provider/--model are passed without --thinking; an",
+            "unmapped level is sent verbatim, the chat template falls back to max,",
+            "and distill goes from 48s to 144s on the same input."
+          ],
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max"
+          }
+        },
+        {
           "id": "glm-5.2:cloud",
           "contextWindow": 1048576,
           "reasoning": true,
