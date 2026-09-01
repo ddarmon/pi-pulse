@@ -306,8 +306,10 @@ defense-in-depth is a client-IP allowlist (loopback + `100.64.0.0/10`
 + Tailscale IPv6 ULA -- everything else 403s even if misbound),
 strict `RUN_ID` regex on every path construction, a 16 KB POST cap,
 an exact same-origin check plus JSON content-type gate on rating POSTs,
-and a nonce-based CSP on brief pages. Only pinned local MathJax assets
-are served from a fixed asset route. The server only ever writes
+and a nonce-based CSP on brief pages (nonce plus `'strict-dynamic'`,
+which MathJax's lazy extension loader requires -- see Known
+constraints). Only pinned local MathJax assets are served from a
+fixed asset route. The server only ever writes
 `out/*.feedback.md`; ingest sweeps them on the next run as usual.
 
 **Deploying it.** The server runs under launchd as
@@ -482,6 +484,24 @@ There is no cron yet -- run it weekly when convenient.
     `summary.md`, and logs a WARN naming each snippet-grounded slot.
     Such a slot is also written to the unfetchable ledger at deliver,
     so the refusal steers later runs instead of only being reported.
+-   **One unvendored TeX macro silences a whole brief's math.**
+    `vendor/mathjax/es5/tex-mml-chtml.js` ships only MathJax's default TeX
+    package set. Anything outside it -- `\boldsymbol` most often, also
+    `\bm`, `\cancel`, `\enclose`, `\href` -- is fetched at typeset time
+    from `[tex]/extensions/<name>.js`, and a failed fetch **rejects the
+    typeset promise**, so every expression on the page stays raw TeX rather
+    than just the offending one. Two independent gates must both hold:
+    `vendor/mathjax/es5/input/tex/extensions/` has to be vendored (it is,
+    35 files, manifested in `SHA256SUMS` -- `verify_mathjax_vendor()` fails
+    closed on an unmanifested *or* missing file, so tree and manifest move
+    in the same commit), and the feedback server's brief CSP has to carry
+    `'strict-dynamic'`, because MathJax 3.2.2 cannot stamp a nonce on the
+    `<script>` it injects. Before 2026-09-01 neither held and 7 of the 20
+    math-bearing briefs served math-free with no error anywhere in
+    `logs/` -- the failure is browser-console-only. Regression tests:
+    `test_lazy_tex_extension_is_vendored_and_served`,
+    `test_brief_csp_allows_mathjax_to_inject_its_extension_loader`,
+    `test_math_render_copies_lazy_tex_extensions`.
 -   **Single-label hostnames are refused** by `sources/url_policy.py`
     and the broker alike. A doubled scheme
     (`https://https://arxiv.org/...`) parses as the legal host `https`;

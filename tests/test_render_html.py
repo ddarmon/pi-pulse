@@ -237,6 +237,39 @@ class RenderIntegrationTests(unittest.TestCase):
             self.assertTrue(asset.is_file())
             self.assertIn(render_html.MATHJAX_NONCE_TOKEN, dst.read_text())
 
+    def test_math_render_copies_lazy_tex_extensions(self) -> None:
+        # install_mathjax_assets copies the whole es5/ tree, so a brief opened
+        # straight off disk (or out of the Dropbox delivery mirror) must find
+        # the extensions the bundle fetches lazily. Without them the typeset
+        # promise rejects and the page loses ALL of its math, not just the one
+        # out-of-package macro.
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "brief.md"
+            dst = Path(d) / "brief.html"
+            src.write_text("# Brief\n\n$\\boldsymbol{X}$\n", encoding="utf-8")
+            self.assertEqual(render_html.render_file(src, dst), 0)
+            ext = (
+                Path(d)
+                / "assets"
+                / "mathjax"
+                / "es5"
+                / "input"
+                / "tex"
+                / "extensions"
+                / "boldsymbol.js"
+            )
+            self.assertTrue(ext.is_file())
+
+    def test_vendor_manifest_covers_the_tex_extensions(self) -> None:
+        # verify_mathjax_vendor() fails closed on an unmanifested OR missing
+        # file, so the tree and SHA256SUMS have to move together.
+        render_html.verify_mathjax_vendor()
+        manifest = (render_html.MATHJAX_VENDOR_DIR / "SHA256SUMS").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("es5/input/tex/extensions/boldsymbol.js", manifest)
+        self.assertIn("es5/input/tex/extensions/autoload.js", manifest)
+
 
 class HtmlSanitizerTests(unittest.TestCase):
     def test_markdown_image_output_is_removed(self) -> None:

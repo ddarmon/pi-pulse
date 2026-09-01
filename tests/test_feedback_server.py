@@ -367,6 +367,33 @@ class TestHTTP(unittest.TestCase):
             self.assertEqual(resp.headers.get_content_type(), "text/javascript")
             self.assertTrue(resp.read())
 
+    def test_lazy_tex_extension_is_vendored_and_served(self):
+        # MathJax 3.2.2 bundles only the default TeX package set. `\boldsymbol`
+        # and friends are fetched at typeset time from [tex]/extensions/. When
+        # that fetch fails the typeset promise rejects and EVERY expression on
+        # the page stays raw TeX -- so a missing extension is a whole-page
+        # outage, not a single-macro degradation.
+        with urllib.request.urlopen(
+            self.url("/brief/assets/mathjax/es5/input/tex/extensions/boldsymbol.js"),
+            timeout=5,
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get_content_type(), "text/javascript")
+            self.assertTrue(resp.read())
+
+    def test_brief_csp_allows_mathjax_to_inject_its_extension_loader(self):
+        # MathJax 3.2.2 cannot stamp a nonce on the <script> it injects, so a
+        # nonce-only script-src blocks the extension load and silences the
+        # page's math. 'strict-dynamic' is what lets the already-trusted,
+        # integrity-checked bundle pull its own same-origin extensions in.
+        with urllib.request.urlopen(self.url(f"/brief/{RUN_ID}"), timeout=5) as resp:
+            csp = resp.headers["Content-Security-Policy"]
+        self.assertIn("'strict-dynamic'", csp)
+        self.assertRegex(csp, r"script-src 'nonce-[^']+' 'strict-dynamic'")
+        # Body-authored scripts still carry no nonce, so they stay inert.
+        self.assertNotIn("script-src 'unsafe-inline'", csp)
+        self.assertNotIn("'unsafe-eval'", csp)
+
     def test_rate_round_trip(self):
         status, res = self.post_json(
             {"run_id": RUN_ID, "card": 2, "mark": "++", "note": "web note"}
