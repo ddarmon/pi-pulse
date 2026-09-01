@@ -230,7 +230,9 @@ def resolve_tailscale_dns_name() -> str | None:
 
     Browsers reaching the server via http://<machine-tailnet-name>:PORT/
     send that name in the Origin header, so it must count as the server's
-    own identity for the rating API's origin check.
+    own identity for the rating API's origin check. Returns the fully
+    qualified MagicDNS name; see magicdns_aliases() for the bare-label
+    form a browser sends when the tailnet is in the DNS search path.
     """
     candidates = (
         ["tailscale", "status", "--json"],
@@ -245,6 +247,23 @@ def resolve_tailscale_dns_name() -> str | None:
         if proc.returncode == 0 and isinstance(name, str) and name.strip():
             return name.strip().rstrip(".")
     return None
+
+
+def magicdns_aliases(dns_name: str) -> list[str]:
+    """Every hostname a browser may put in Origin for this MagicDNS name.
+
+    The tailnet is in the DNS search path, so the bare machine label
+    (`myhost`) resolves to the same host as the fully
+    qualified name and is what a browser sends in Origin when the URL was
+    typed short. Both name the server itself, so both must count as its
+    own identity -- otherwise the page loads and only the rating POST
+    403s ("bad origin").
+    """
+    name = dns_name.strip().rstrip(".").lower()
+    if not name:
+        return []
+    label = name.split(".", 1)[0]
+    return [name] if label == name else [name, label]
 
 
 # --- HTML generation ----------------------------------------------------
@@ -816,7 +835,8 @@ def main() -> int:
         host = resolve_tailscale_ip()
         dns_name = resolve_tailscale_dns_name()
         if dns_name:
-            extra_hosts = f"{extra_hosts},{dns_name}" if extra_hosts else dns_name
+            names = ",".join(magicdns_aliases(dns_name))
+            extra_hosts = f"{extra_hosts},{names}" if extra_hosts else names
     out_dir = args.out_dir.resolve()
     if not out_dir.is_dir():
         print(f"ERROR: out dir does not exist: {out_dir}", file=sys.stderr)
