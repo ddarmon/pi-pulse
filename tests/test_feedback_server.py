@@ -170,6 +170,30 @@ class TestOriginValidation(unittest.TestCase):
             feedback_server.origin_allowed("http://localhost:8377", hosts, 8377)
         )
 
+    def test_magicdns_short_label_counts_as_own_origin(self):
+        # Browsing http://pulse-host:8377/ (tailnet in the DNS
+        # search path) sends the bare label in Origin; the page loads but
+        # the rating POST 403s unless the label is an allowed host too.
+        aliases = feedback_server.magicdns_aliases("pulse-host.tail1234.ts.net.")
+        self.assertEqual(
+            aliases, ["pulse-host.tail1234.ts.net", "pulse-host"]
+        )
+        hosts = feedback_server.allowed_origin_hosts("100.64.1.2", ",".join(aliases))
+        for origin in (
+            "http://pulse-host:8377",
+            "http://pulse-host.tail1234.ts.net:8377",
+            "http://100.64.1.2:8377",
+        ):
+            self.assertTrue(
+                feedback_server.origin_allowed(origin, hosts, 8377), origin
+            )
+        self.assertFalse(
+            feedback_server.origin_allowed("http://evil.example:8377", hosts, 8377)
+        )
+
+    def test_magicdns_aliases_of_bare_name_has_no_duplicate(self):
+        self.assertEqual(feedback_server.magicdns_aliases("host"), ["host"])
+
     def test_extra_hosts_opt_in(self):
         hosts = feedback_server.allowed_origin_hosts(
             "100.64.1.2", "pulse.tail1234.ts.net"
