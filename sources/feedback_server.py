@@ -561,6 +561,16 @@ Re-run the deliver step to regenerate it.</p>
 # CSP for pages this module generates itself: no scripts on the index,
 # inline styles only. Brief pages get only nonce-bearing renderer/widget
 # scripts; model-authored and historical raw script tags stay inert.
+#
+# `'strict-dynamic'` is required, not decorative: MathJax 3.2.2 loads any
+# TeX macro outside the bundled default package set (`\boldsymbol`, `\bm`,
+# `\cancel`, ...) by injecting a <script> at typeset time, and 3.2.2 has no
+# way to stamp a nonce on it. Without `'strict-dynamic'` that injection is
+# refused, the typeset promise REJECTS, and every expression on the page
+# silently stays raw TeX. It does not widen the injection boundary: body
+# script tags carry no nonce and remain blocked either way -- the propagated
+# trust reaches only scripts already-trusted code pulls in, and MathJax pulls
+# only same-origin paths off the integrity-checked vendor route.
 INDEX_CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
     "frame-ancestors 'none'; form-action 'none'"
@@ -569,7 +579,7 @@ INDEX_CSP = (
 
 def brief_csp(nonce: str) -> str:
     return (
-        f"default-src 'none'; script-src 'nonce-{nonce}'; "
+        f"default-src 'none'; script-src 'nonce-{nonce}' 'strict-dynamic'; "
         "style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; "
         "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
         "form-action 'none'"
