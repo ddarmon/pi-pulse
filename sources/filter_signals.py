@@ -23,6 +23,16 @@ unseen, gets planned, and degrades to a snippet again. The threshold is
 distinct failed URLs on one host, so a single transient failure never
 bans a publisher.
 
+A signal whose URL is a review or reader page wrapping one arXiv paper
+(`pith.science/paper/<id>`, `alphaxiv.org/abs/<id>`) is rewritten to
+`https://arxiv.org/abs/<id>` before any ledger check. The wrapper is
+not the primary source, and it is the less reliable fetch: pith.science
+answered one expand fetch with a 202 stub and no text, the card's
+fallback search found only the same stub, and the slot dropped. The
+rewrite also lets the seen ledger recognize a paper already surfaced
+under its arXiv URL. Each rewrite is reported on stderr as
+`REWROTE signal=<id> from=<url> to=<url>`.
+
 Each dropped signal is reported on stderr as
 `FILTERED signal=<id> reason=<reason> url=<url>`. If no signal
 survives, stdout is empty -- pulse.sh treats an empty signal sheet as
@@ -51,6 +61,13 @@ DEFAULT_HOST_BLOCK_THRESHOLD = 2
 # class of academic signals over failures that belong to the targets it
 # redirects to. Their exact URLs are still blocked per-URL as usual.
 NEVER_BLOCK_HOSTS = frozenset({"doi.org", "dx.doi.org", "hdl.handle.net"})
+# Host -> path prefix of pages that wrap a single arXiv paper. Only hosts
+# observed in the pipeline's own ledgers; extend from evidence.
+ARXIV_WRAPPERS = {
+    "pith.science": "/paper/",
+    "alphaxiv.org": "/abs/",
+}
+ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5}(?:v\d+)?)/?$")
 
 
 def load_ledger(path: Path) -> set[str]:
@@ -154,6 +171,26 @@ def block_url(lines: list[str]) -> str | None:
     return None
 
 
+def arxiv_unwrap(url: str) -> str | None:
+    """The arXiv abstract URL behind a known wrapper page, else None."""
+    parts = urlsplit(url)
+    prefix = ARXIV_WRAPPERS.get(host_key(parts.hostname or ""))
+    if prefix is None or not parts.path.startswith(prefix):
+        return None
+    m = ARXIV_ID_RE.fullmatch(parts.path[len(prefix):])
+    return f"https://arxiv.org/abs/{m.group(1)}" if m else None
+
+
+def replace_url(lines: list[str], url: str) -> list[str]:
+    """Rewrite the block's first `- url:` line, keeping its indentation."""
+    out = list(lines)
+    for index, line in enumerate(out):
+        if URL_RE.match(line):
+            out[index] = line[: line.index("url:")] + f"url: {url}"
+            break
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("signals", type=Path, help="Raw signal sheet (.tmp/signals_raw.md)")
@@ -206,6 +243,14 @@ def main() -> int:
                     url = ""
                     reason = f"invalid-url:{exc}"
                 else:
+                    unwrapped = arxiv_unwrap(raw_url)
+                    if unwrapped:
+                        print(
+                            f"REWROTE signal={signal_id} from={raw_url} to={unwrapped}",
+                            file=sys.stderr,
+                        )
+                        lines = replace_url(lines, unwrapped)
+                        raw_url = unwrapped
                     url = normalize(raw_url)
                     if url in seen:
                         reason = "seen-url"

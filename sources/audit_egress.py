@@ -23,7 +23,11 @@ EXPECTED_TOOLS = {
     "scout": {"search", "fetch"},
     "plan": set(),
     "expand": set(),
+    "lede": set(),
 }
+# Stages that run only on some days. The lede rewrite runs only when a
+# planned card dropped, so its absence is not evidence of anything.
+OPTIONAL_STAGES = {"lede"}
 EXPECTED_EGRESS = {
     "scout": {"search", "fetch"},
     "expand": {"search", "fetch"},
@@ -33,6 +37,7 @@ PROMPTS = {
     "scout": Path("prompts/scout_signals.md"),
     "plan": Path("prompts/compose_plan.md"),
     "expand": Path("prompts/compose_expand.md"),
+    "lede": Path("prompts/compose_lede.md"),
 }
 
 
@@ -351,7 +356,7 @@ def audit_capabilities(records: list[dict], manifest: dict[str, str]) -> list[st
             violations.append(f"capability line {line} lacks provider/model provenance")
 
     for stage in EXPECTED_TOOLS:
-        if stage not in stages_seen:
+        if stage not in stages_seen and stage not in OPTIONAL_STAGES:
             violations.append(f"no {stage} capability record found")
     return violations
 

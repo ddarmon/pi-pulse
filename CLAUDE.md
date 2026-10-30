@@ -10,7 +10,8 @@ take it back (GitHub keeps PR-referenced commits fetchable by SHA).
 ## Pipeline
 
 Source-first: six stages, `3 + N` pi calls where N is the number of
-card slots that survive plan. Plan picks from real evidence (scout's
+card slots that survive plan, plus one lede rewrite on days a planned
+card drops. Plan picks from real evidence (scout's
 discovered URLs), not imagined sources, so cards rarely drop in expand.
 
 1.  **collect** -- `sources/collect_{obsidian,sesh,anki}.py` populate
@@ -33,7 +34,11 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     by `PI_PULSE_SCOUT_MAX_INTERESTS` (default 12) and
     `PI_PULSE_SCOUT_QUERIES_PER_INTEREST` (default 2). Aggregator
     results (HN, Reddit, Twitter, link blogs) are rejected.
-    `sources/filter_signals.py` then deterministically drops signals
+    `sources/filter_signals.py` first rewrites a page that wraps one
+    arXiv paper (`pith.science/paper/<id>`, `alphaxiv.org/abs/<id>`) to
+    `arxiv.org/abs/<id>` (`REWROTE` on stderr): a pith.science fetch
+    answered 202 with no text on 2026-10-27 and cost that run its bridge
+    card. It then deterministically drops signals
     whose normalized URL is in `memory/seen_urls.jsonl` (already
     surfaced) or `memory/unfetchable_urls.jsonl` (committed before
     but the expand fetch failed), dedupes within the sheet, and
@@ -77,7 +82,14 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
     `logs/${RUN_ID}/dropped.md` -- never into the delivered brief.
 6.  **deliver** -- stitch `.tmp/expand/theme.md` (lifted from plan)
     with each non-empty per-slot body into `out/${RUN_ID}.md`
-    (where `RUN_ID` is `YYYY-MM-DD-HHMM`); append URLs to
+    (where `RUN_ID` is `YYYY-MM-DD-HHMM`). Plan writes that theme
+    sentence before expand runs, so when any planned card dropped
+    (split or expand) one sealed `pi -p prompts/compose_lede.md` call
+    rewrites it from the delivered cards (`.tmp/expand/cards.md`); if
+    that call fails or returns something that is not one sentence of
+    prose, the brief ships with no lede rather than one naming a card
+    it lacks. `PI_PULSE_LEDE_{MODEL,PROVIDER,THINKING}` default to the
+    plan stage's values. Then append URLs to
     `memory/seen_urls.jsonl`; record fetch-failed slots' Source URLs
     in `memory/unfetchable_urls.jsonl` via
     `sources/append_unfetchable.py` (model-emitted drops plus every
@@ -415,6 +427,10 @@ There is no cron yet -- run it weekly when convenient.
     detail. `expand.log.md` concatenates per-slot session digests.
 -   `logs/${RUN_ID}/dropped.md` -- which expand slots dropped and why
     (empty `(none)` on a clean run).
+-   `logs/${RUN_ID}/lede.log.md` and the `- lede:` line in `summary.md`
+    -- whether the brief's opening sentence is plan's (`plan`, no drops),
+    was rewritten from the delivered cards (`rewritten`), or was left out
+    because the rewrite failed (`omitted`).
 -   `logs/${RUN_ID}/grounding.md` -- how many delivered cards came from the
     committed primary source vs the search-snippet fallback, naming each
     snippet-grounded slot. A fallback card never appears in `dropped.md`,

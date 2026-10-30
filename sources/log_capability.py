@@ -74,7 +74,7 @@ def append_record(path: Path, stage: str, slot: str | None, command: list[str]) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("distill", "scout", "plan", "expand"))
+    parser.add_argument("stage", choices=("distill", "scout", "plan", "expand", "lede"))
     parser.add_argument("--slot")
     # Split at the first `--` ourselves: argparse.REMAINDER matches
     # positionals greedily, so `expand --slot 01 -- pi ...` would swallow

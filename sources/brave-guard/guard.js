@@ -368,6 +368,14 @@ export async function guardedGet(rawUrl, options = {}) {
         response.destroy();
         throw new GuardError(`HTTP ${status}`, "http-error");
       }
+      // 202 Accepted and 204 No Content are 2xx but carry no document: a
+      // live pith.science fetch answered 202 with a 2 KB stub, was logged
+      // `ok`, and the egress record then hid why the slot had nothing to
+      // write from. Refuse them so the failure is named where it happened.
+      if (status === 202 || status === 204) {
+        response.destroy();
+        throw new GuardError(`HTTP ${status} carries no document`, "http-no-content");
+      }
       const encoding = String(response.headers["content-encoding"] || "identity").toLowerCase();
       if (encoding && encoding !== "identity") {
         response.destroy();

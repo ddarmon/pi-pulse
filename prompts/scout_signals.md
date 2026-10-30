@@ -69,6 +69,11 @@ Process. For each prioritized interest, in order:
         clicks. (You may follow a link FROM an aggregator to a
         primary post and cite the primary post.) Also skip anything
         whose topic appears in the memo's "Avoid" section.
+    -   **The paper, not a page about it.** When a result is a
+        review, reader, or summary page for one arXiv paper (for
+        example pith.science, alphaxiv.org, or a paper-digest blog),
+        cite the paper itself as `https://arxiv.org/abs/<id>`. The
+        wrapper is secondary and often will not serve its text.
 
     Source breadth: useful signals include arXiv papers, journal
     articles, conference proceedings, lecture notes from a
