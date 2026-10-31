@@ -19,7 +19,9 @@
 #      PI_PULSE_EXPAND_PARALLEL) to write 250-400 words of prose.
 #   6. Stitch theme + per-slot bodies into out/YYYY-MM-DD-HHMM.md, aggregate
 #      drops to logs/YYYY-MM-DD-HHMM/dropped.md, append URLs to seen ledger,
-#      render HTML, copy to delivery dir.
+#      render HTML, copy to delivery dir. If any planned card dropped, one
+#      sealed Pi call first rewrites the theme sentence from the delivered
+#      cards, since plan wrote it before expand ran.
 #
 # Card quotas are CAPS, not targets: on slow signal days the brief
 # shrinks rather than padding. ChatGPT Pulse parity.
@@ -51,7 +53,8 @@
 #   PI_PULSE_<STAGE>_MODEL    Per-stage model override (fallback: PI_MODEL)
 #   PI_PULSE_<STAGE>_PROVIDER Per-stage provider override (fallback: PI_PROVIDER)
 #   PI_PULSE_<STAGE>_THINKING Per-stage --thinking level (default: unset)
-#                             <STAGE> in DISTILL, SCOUT, PLAN, EXPAND
+#                             <STAGE> in DISTILL, SCOUT, PLAN, EXPAND, LEDE
+#                             (LEDE falls back to the PLAN values)
 #   PI_PULSE_NOTES_SINCE      Days of notes history (default: 30)
 #   PI_PULSE_SESH_SINCE       Days of sesh history  (default: 7)
 #   PI_PULSE_SESH_AGGREGATION_ROOT  Directory of per-host mirrored homes to
@@ -124,11 +127,17 @@ PLAN_THINKING="${PI_PULSE_PLAN_THINKING:-}"
 EXPAND_PROVIDER="${PI_PULSE_EXPAND_PROVIDER:-$PI_PROVIDER}"
 EXPAND_MODEL="${PI_PULSE_EXPAND_MODEL:-$PI_MODEL}"
 EXPAND_THINKING="${PI_PULSE_EXPAND_THINKING:-}"
+# The lede rewrite (step 5c2) replaces a sentence plan wrote, so it
+# defaults to plan's model and level rather than the global ones.
+LEDE_PROVIDER="${PI_PULSE_LEDE_PROVIDER:-$PLAN_PROVIDER}"
+LEDE_MODEL="${PI_PULSE_LEDE_MODEL:-$PLAN_MODEL}"
+LEDE_THINKING="${PI_PULSE_LEDE_THINKING:-$PLAN_THINKING}"
 
 # Optional --thinking flags, present only when the stage's level is set.
 distill_think=(); [[ -n "$DISTILL_THINKING" ]] && distill_think=(--thinking "$DISTILL_THINKING")
 scout_think=();   [[ -n "$SCOUT_THINKING"   ]] && scout_think=(--thinking "$SCOUT_THINKING")
 plan_think=();    [[ -n "$PLAN_THINKING"    ]] && plan_think=(--thinking "$PLAN_THINKING")
+lede_think=();    [[ -n "$LEDE_THINKING"    ]] && lede_think=(--thinking "$LEDE_THINKING")
 
 # Repo-owned Pi model catalog. ~/.pi/agent/models.json is machine-global
 # and rewritten by `ollama launch pi` / `pi update`; a launcher-written
@@ -269,7 +278,7 @@ newest_session() {
 # 0. Sanity: make sure ollama is up. Cloud-routed models still need the
 # local daemon to proxy. Start it if any stage's resolved provider is ollama.
 needs_ollama=0
-for _prov in "$DISTILL_PROVIDER" "$SCOUT_PROVIDER" "$PLAN_PROVIDER" "$EXPAND_PROVIDER"; do
+for _prov in "$DISTILL_PROVIDER" "$SCOUT_PROVIDER" "$PLAN_PROVIDER" "$EXPAND_PROVIDER" "$LEDE_PROVIDER"; do
   [[ "$_prov" == "ollama" ]] && needs_ollama=1
 done
 if [[ "$needs_ollama" == 1 ]]; then
@@ -289,12 +298,13 @@ if ! uv run sources/check_models.py "$PI_AGENT_DIR/models.json" \
      --require scout "$SCOUT_PROVIDER" "$SCOUT_MODEL" "$SCOUT_THINKING" \
      --require plan "$PLAN_PROVIDER" "$PLAN_MODEL" "$PLAN_THINKING" \
      --require expand "$EXPAND_PROVIDER" "$EXPAND_MODEL" "$EXPAND_THINKING" \
+     --require lede "$LEDE_PROVIDER" "$LEDE_MODEL" "$LEDE_THINKING" \
      2>"$LOG_DIR/check-models.err"; then
   cat "$LOG_DIR/check-models.err" >&2
   log "ERROR: model catalog check failed; see $LOG_DIR/check-models.err"
   exit 1
 fi
-log "model catalog: $(basename "$PI_AGENT_DIR")/models.json verified for 4 stages"
+log "model catalog: $(basename "$PI_AGENT_DIR")/models.json verified for 5 stages"
 
 # 0b. Ensure Anki is running so AnkiConnect can serve collect_anki.py.
 if ! curl -sf --max-time 2 http://127.0.0.1:8765 -d '{"action":"version","version":6}' >/dev/null 2>&1; then
@@ -570,13 +580,10 @@ while IFS=$'\t' read -r slot_id _slot_tag _slot_url; do
   fi
 done < "$MANIFEST_FILE"
 
-# 5b. Stitch theme + per-slot bodies into the delivered brief.
-# theme.md ends with the lede paragraph + a single newline; without an
-# extra blank line, markdown renderers merge the first `## ...` heading
-# into the lede paragraph as plain text.
+# 5b. Stitch the delivered per-slot bodies. The theme is prepended in 5c3,
+# once 5c2 has had the chance to rewrite it for any dropped cards.
+CARDS_FILE=".tmp/expand/cards.md"
 {
-  cat .tmp/expand/theme.md
-  echo
   while IFS=$'\t' read -r slot_id _slot_tag _slot_url; do
     body=".tmp/expand/$slot_id/body.md"
     # A valid card body always starts with a `## ` heading. Anything
@@ -589,7 +596,7 @@ done < "$MANIFEST_FILE"
       echo
     fi
   done < "$MANIFEST_FILE"
-} > "$PENDING_OUT"
+} > "$CARDS_FILE"
 
 # 5c. Aggregate dropped slots into logs (never into the delivered brief).
 # Split-stage drops (plan slot whose Source URL failed verification
@@ -627,6 +634,63 @@ split_dropped=$(grep -c '^DROPPED ' "$LOG_DIR/split-plan.err" || true)
   fi
 } > "$LOG_DIR/dropped.md"
 log "expand drops: ${dropped_count}/${SLOT_COUNT} (split-stage drops: ${split_dropped:-0})"
+
+# 5c2. Re-lede a brief that lost cards. Plan wrote the theme sentence
+# before expand ran, so after any drop it can name a card the brief no
+# longer contains: 2026-10-27 promised three threads and delivered two.
+# One sealed Pi call rewrites it from the cards actually delivered.
+# Non-fatal: if the call fails or its answer does not look like a single
+# lede sentence, the brief ships with no lede rather than a wrong one.
+# Skipped when every slot dropped, since step 7 refuses delivery anyway.
+lede_status="plan"
+lede_drops=$((dropped_count + ${split_dropped:-0}))
+if [[ "$lede_drops" -gt 0 && "$dropped_count" -lt "$SLOT_COUNT" ]]; then
+  log "lede stage: ${LEDE_PROVIDER}/${LEDE_MODEL}${LEDE_THINKING:+ thinking=$LEDE_THINKING} (${lede_drops} planned card(s) dropped)"
+  lede_start=$SECONDS
+  mkdir -p "$SESSION_DIR/lede"
+  lede=""
+  if run_pi_retry .tmp/expand/lede.md "$LOG_DIR/lede.err" lede -- \
+     env -u BRAVE_API_KEY pi -p "$(cat prompts/compose_lede.md)" \
+        --provider "$LEDE_PROVIDER" --model "$LEDE_MODEL" \
+        ${lede_think[@]+"${lede_think[@]}"} \
+        --no-tools --no-context-files --no-extensions --no-skills \
+        --session-dir "$SESSION_DIR/lede" \
+        @"$CARDS_FILE" ; then
+    lede=$(tr '\n' ' ' < .tmp/expand/lede.md | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+  fi
+  # A lede is one sentence of prose: never a heading, never a drop marker,
+  # and the plan-written ones run ~150-300 chars.
+  if [[ -n "$lede" && "${#lede}" -le 600 && "$lede" != \#* \
+        && "$lede" != *"DROPPED slot="* ]]; then
+    lede_status="rewritten"
+  else
+    lede=""
+    lede_status="omitted"
+    log "WARN: lede rewrite failed or was malformed; delivering without a lede (see $LOG_DIR/lede.err)"
+  fi
+  log "lede finished in $((SECONDS - lede_start))s (${lede_status})"
+  lede_session=$(newest_session "$SESSION_DIR/lede")
+  if [[ -n "$lede_session" ]]; then
+    uv run sources/inspect_session.py "$lede_session" --label "lede" \
+      > "$LOG_DIR/lede.log.md" 2>/dev/null || true
+  fi
+  # theme.md is `# Pulse <label>`, a blank line, then the lede paragraph.
+  pulse_heading=$(head -n 1 .tmp/expand/theme.md)
+  if [[ -n "$lede" ]]; then
+    printf '%s\n\n%s\n' "$pulse_heading" "$lede" > .tmp/expand/theme.md
+  else
+    printf '%s\n' "$pulse_heading" > .tmp/expand/theme.md
+  fi
+fi
+
+# 5c3. Assemble the pending brief. theme.md ends with the lede paragraph +
+# a single newline; without an extra blank line, markdown renderers merge
+# the first `## ...` heading into the lede paragraph as plain text.
+{
+  cat .tmp/expand/theme.md
+  echo
+  cat "$CARDS_FILE"
+} > "$PENDING_OUT"
 
 # 5d. Grounding census. A slot whose primary fetch failed still produces a
 # card from the search-snippet fallback: no drop, no error, but the prose
@@ -694,12 +758,14 @@ fi
   echo "- feedback digest: ${fb_census}"
   echo "- expand: slots=${SLOT_COUNT} parallel=${EXPAND_PARALLEL} drops=${dropped_count}"
   echo "- grounding: ${grounding_fetch} from primary source, ${grounding_fallback} from search fallback (\`${LOG_DIR}/grounding.md\`)"
+  echo "- lede: ${lede_status}"
   echo "- security audit: ${audit_status} (\`${LOG_DIR}/egress.md\`)"
   echo
   [[ -f "$LOG_DIR/distill.log.md" ]] && cat "$LOG_DIR/distill.log.md"
   [[ -f "$LOG_DIR/scout.log.md" ]]   && cat "$LOG_DIR/scout.log.md"
   [[ -f "$LOG_DIR/plan.log.md" ]]    && cat "$LOG_DIR/plan.log.md"
   [[ -f "$LOG_DIR/expand.log.md" ]]  && cat "$LOG_DIR/expand.log.md"
+  [[ -f "$LOG_DIR/lede.log.md" ]]    && cat "$LOG_DIR/lede.log.md"
   [[ -f "$LOG_DIR/egress.md" ]]      && cat "$LOG_DIR/egress.md"
 } > "$LOG_DIR/summary.md"
 

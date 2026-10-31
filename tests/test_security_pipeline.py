@@ -265,6 +265,38 @@ class SignalFilterTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("https://doi.org/10.1000/fresh", result.stdout)
 
+    def test_arxiv_wrapper_pages_are_rewritten_to_the_abstract(self) -> None:
+        # A pith.science review page answered expand with a 202 stub and the
+        # bridge card dropped; the arXiv abstract is the primary source.
+        sheet = (
+            "# Signals 2026-10-27\n\n"
+            "## Signal S1\n- url: https://pith.science/paper/2505.18373\n- title: t\n\n"
+            "## Signal S2\n- url: https://www.alphaxiv.org/abs/2609.16338v2\n\n"
+            "## Signal S3\n- url: https://pith.science/\n"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = self.run_filter(root, sheet, [])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("- url: https://arxiv.org/abs/2505.18373\n- title: t", result.stdout)
+            self.assertIn("- url: https://arxiv.org/abs/2609.16338v2", result.stdout)
+            self.assertNotIn("pith.science/paper", result.stdout)
+            # A wrapper page that names no paper is left alone.
+            self.assertIn("- url: https://pith.science/\n", result.stdout)
+            self.assertIn("REWROTE signal=S1", result.stderr)
+
+    def test_rewritten_wrapper_is_checked_against_the_seen_ledger(self) -> None:
+        sheet = "# Signals 2026-10-27\n\n## Signal S1\n- url: https://pith.science/paper/2505.18373\n"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "seen.jsonl").write_text(
+                json.dumps({"url": "https://arxiv.org/abs/2505.18373"}) + "\n"
+            )
+            result = self.run_filter(root, sheet, [])
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("reason=seen-url", result.stderr)
+
     def test_private_url_is_filtered_without_echoing_it_to_logs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -457,7 +489,7 @@ class PipelineFlagTests(unittest.TestCase):
 
     def test_pure_synthesis_stages_are_sealed(self) -> None:
         sealed = "--no-tools --no-context-files --no-extensions --no-skills"
-        self.assertGreaterEqual(self.pulse.count(sealed), 2)  # distill + plan
+        self.assertGreaterEqual(self.pulse.count(sealed), 3)  # distill + plan + lede
         self.assertIn(sealed, self.expand)
         self.assertIn(sealed, self.suggest)
 
@@ -502,6 +534,22 @@ class PipelineFlagTests(unittest.TestCase):
         self.assertIn("PI_PULSE_CAPABILITY_LOG", self.pulse)
         self.assertIn('log_capability.py "$label"', self.pulse)
         self.assertIn("log_capability.py expand", self.expand)
+
+    def test_lede_is_rewritten_after_drops_and_before_assembly(self) -> None:
+        # 2026-10-27's lede promised three threads after one card dropped:
+        # plan writes the theme before expand, so it must be revisited
+        # once drops are known and before the brief is assembled.
+        drops = self.pulse.index('} > "$LOG_DIR/dropped.md"')
+        lede = self.pulse.index("run_pi_retry .tmp/expand/lede.md")
+        assemble = self.pulse.index('} > "$PENDING_OUT"')
+        audit = self.pulse.index("sources/audit_egress.py")
+        self.assertLess(drops, lede)
+        self.assertLess(lede, assemble)
+        # The lede call must be on the audited record, like every Pi call.
+        self.assertLess(lede, audit)
+        self.assertIn('--session-dir "$SESSION_DIR/lede"', self.pulse)
+        self.assertIn('@"$CARDS_FILE"', self.pulse)
+        self.assertIn("--require lede", self.pulse)
 
     def test_brief_is_published_only_after_audit_passes(self) -> None:
         audit_gate = self.pulse.index('if [[ "$audit_status" != "pass" ]]')
@@ -686,6 +734,27 @@ class CapabilityEvidenceTests(unittest.TestCase):
             audit_egress.audit_capabilities(records, {"01": "https://example.com"}),
             [],
         )
+        # The lede rewrite runs only on drop days: optional, but sealed when present.
+        lede = {
+            **common,
+            "_line": 5,
+            "stage": "lede",
+            "slot": None,
+            "no_tools": True,
+            "no_builtin_tools": False,
+            "tools": [],
+            "extensions": [],
+            "skills": [],
+        }
+        self.assertEqual(
+            audit_egress.audit_capabilities(records + [lede], {"01": "https://example.com"}),
+            [],
+        )
+        violations = audit_egress.audit_capabilities(
+            records + [{**lede, "no_tools": False, "tools": ["fetch"]}],
+            {"01": "https://example.com"},
+        )
+        self.assertTrue(any("lede lacks --no-tools" in item for item in violations))
         records[2]["no_tools"] = False
         violations = audit_egress.audit_capabilities(
             records, {"01": "https://example.com"}

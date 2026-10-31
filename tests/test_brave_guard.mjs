@@ -88,6 +88,22 @@ test("redirect targets are re-resolved and private answers are refused", async (
   assert.equal(opens, 1, "private redirect must be rejected before a second request");
 });
 
+test("2xx statuses that carry no document are refused, not logged ok", async () => {
+  const lookup = async () => [{ address: "93.184.216.34", family: 4 }];
+  for (const status of [202, 204]) {
+    const open = async () => {
+      const response = Readable.from([Buffer.from("<html>please wait</html>")]);
+      response.statusCode = status;
+      response.headers = { "content-type": "text/html" };
+      return response;
+    };
+    await assert.rejects(
+      guardedGet("https://example.com/paper", { lookup, open }),
+      { name: "GuardError", message: new RegExp(`HTTP ${status}`) },
+    );
+  }
+});
+
 test("response stream is capped while reading", async () => {
   const stream = Readable.from([Buffer.alloc(6), Buffer.alloc(6)]);
   await assert.rejects(readStreamBounded(stream, 10), /exceeds 10 bytes/);
