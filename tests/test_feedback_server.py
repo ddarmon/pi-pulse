@@ -521,3 +521,96 @@ class TestHTTP(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+PROFILE_REPORT = {
+    "run_id": RUN_ID,
+    "generated": "2026-01-02T05:20:00",
+    "model": "test-model",
+    "proposals": 3,
+    "applied": [
+        {
+            "type": "ADD",
+            "section": "### General",
+            "target": "",
+            "text": "-   A new <thread> & more",
+            "rationale": "Recurs.",
+            "evidence": "2026-01-01, 2026-01-02",
+        }
+    ],
+    "left_for_reader": [
+        {
+            "type": "ADD",
+            "section": "## Avoid",
+            "target": "",
+            "text": "-   Something to avoid",
+            "rationale": "Rated [--].",
+            "evidence": "feedback",
+            "reason": "touches ## Avoid",
+        }
+    ],
+    "unmatched": [],
+    "snapshot": "memory/interests-history/2026-01-02-0520.md",
+    "diff": "--- before\n+++ after\n@@ -1 +1,2 @@\n x\n+-   A new <thread> & more\n",
+}
+
+
+class TestProfileUpdates(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="pulse-fb-profile-"))
+        (self.dir / f"{RUN_ID}.feedback.md").write_text(make_feedback_text())
+        (self.dir / "profile").mkdir()
+        (self.dir / "profile" / f"{RUN_ID}.json").write_text(json.dumps(PROFILE_REPORT))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_discovers_changed_weeks_only(self):
+        quiet = dict(PROFILE_REPORT, applied=[], left_for_reader=[], unmatched=[])
+        (self.dir / "profile" / "2026-01-09-0500.json").write_text(json.dumps(quiet))
+        (self.dir / "profile" / "not-a-run.json").write_text(json.dumps(PROFILE_REPORT))
+        (self.dir / "profile" / "2026-01-16-0500.json").write_text("{broken")
+        updates = feedback_server.discover_profile_updates(self.dir)
+        self.assertEqual(updates, [{"run_id": RUN_ID, "applied": 1, "left": 1, "unmatched": 0}])
+
+    def test_missing_profile_dir_is_empty(self):
+        shutil.rmtree(self.dir / "profile")
+        self.assertEqual(feedback_server.discover_profile_updates(self.dir), [])
+
+    def test_index_interleaves_profile_entry_above_its_brief(self):
+        page = feedback_server.index_html(
+            feedback_server.discover_runs(self.dir),
+            feedback_server.discover_profile_updates(self.dir),
+        )
+        self.assertIn('class="profile" href="/profile/2026-01-02-0500"', page)
+        self.assertIn("Profile updated", page)
+        self.assertIn("<b>1</b> need you", page)
+        self.assertLess(page.index('href="/profile/'), page.index('href="/brief/'))
+
+    def test_profile_page_escapes_model_text(self):
+        page = feedback_server.profile_html(RUN_ID, PROFILE_REPORT)
+        self.assertIn("A new &lt;thread&gt; &amp; more", page)
+        self.assertNotIn("<thread>", page)
+        self.assertIn("Needs you", page)
+        self.assertIn('<span class="add">', page)
+        self.assertIn("memory/interests-history/2026-01-02-0520.md", page)
+        self.assertNotIn("<script", page)
+
+    def test_http_profile_route(self):
+        server = feedback_server.make_server("127.0.0.1", 0, self.dir)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/profile/{RUN_ID}", timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(resp.headers["Content-Security-Policy"], feedback_server.INDEX_CSP)
+                self.assertIn("Profile update", resp.read().decode("utf-8"))
+            for bad in ("2026-01-03-0500", "..%2F..%2Fetc", "x.json"):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/profile/{bad}", timeout=5)
+                self.assertEqual(ctx.exception.code, 404)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)

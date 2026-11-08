@@ -31,6 +31,9 @@ The server adds defense-in-depth on top:
   under a strict CSP.
 * Rating writes require JSON and reject a foreign browser Origin before
   reading the request body.
+* `/profile/<RUN_ID>` renders `out/profile/<RUN_ID>.json` (the weekly
+  profile-update report) read-only; every model-written string in it is
+  HTML-escaped and the page carries the script-free index CSP.
 * No shell-outs except the optional `tailscale ip -4` lookup at startup.
 
 Usage:
@@ -204,6 +207,47 @@ def discover_runs(out_dir: Path) -> list[dict]:
     return runs
 
 
+PROFILE_DIRNAME = "profile"
+
+
+def load_profile_report(out_dir: Path, run_id: str) -> dict | None:
+    """The weekly profile-update report for run_id, or None.
+
+    Callers validate run_id first; that regex is what keeps the path
+    below inside out/profile/.
+    """
+    path = out_dir / PROFILE_DIRNAME / f"{run_id}.json"
+    try:
+        report = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def discover_profile_updates(out_dir: Path) -> list[dict]:
+    """[{run_id, applied, left, unmatched}] newest-first, changes only.
+
+    A week with no proposals writes a report (so the weekly cadence
+    counts it) but has nothing to tell the reader, so it is not listed.
+    """
+    updates: list[dict] = []
+    for f in sorted((out_dir / PROFILE_DIRNAME).glob("*.json"), reverse=True):
+        run_id = f.name[: -len(".json")]
+        if not valid_run_id(run_id):
+            continue
+        report = load_profile_report(out_dir, run_id)
+        if report is None:
+            continue
+        counts = {
+            "applied": len(report.get("applied") or []),
+            "left": len(report.get("left_for_reader") or []),
+            "unmatched": len(report.get("unmatched") or []),
+        }
+        if any(counts.values()):
+            updates.append({"run_id": run_id, **counts})
+    return updates
+
+
 def resolve_tailscale_ip() -> str:
     """Autodetect this machine's Tailscale IPv4 (for --host tailscale)."""
     candidates = (
@@ -270,10 +314,12 @@ def magicdns_aliases(dns_name: str) -> list[str]:
 
 INDEX_CSS = """
 :root { --fg:#1a1a1a; --bg:#fafaf7; --muted:#555; --link:#0a58ca;
-        --card:#ffffff; --rule:#d8d4cc; --hot:#b45309; }
+        --card:#ffffff; --rule:#d8d4cc; --hot:#b45309;
+        --prof:#6d28d9; --prof-bg:#f3eefe; }
 @media (prefers-color-scheme: dark) {
   :root { --fg:#e7e3da; --bg:#1c1b18; --muted:#a8a39a; --link:#7fb3ff;
-          --card:#26241f; --rule:#3a3733; --hot:#f0a350; }
+          --card:#26241f; --rule:#3a3733; --hot:#f0a350;
+          --prof:#b9a2ff; --prof-bg:#2a2438; }
 }
 * { box-sizing: border-box; }
 body { margin:0; padding:1.5rem 1rem 4rem; color:var(--fg); background:var(--bg);
@@ -286,21 +332,79 @@ a.run { display:flex; justify-content:space-between; align-items:baseline; gap:1
 a.run .counts { color:var(--muted); font-size:0.9rem; white-space:nowrap; }
 a.run.unrated { border-color:var(--hot); }
 a.run.unrated .counts { color:var(--hot); font-weight:600; }
+a.profile { display:block; padding:0.9rem 1rem; margin:0.5rem 0;
+  border:2px solid var(--prof); border-left-width:8px; border-radius:10px;
+  background:var(--prof-bg); color:var(--fg); text-decoration:none; }
+a.profile .tag { display:block; color:var(--prof); font-weight:700; font-size:0.8rem;
+  letter-spacing:0.06em; text-transform:uppercase; }
+a.profile .what { display:flex; justify-content:space-between; gap:1rem; align-items:baseline;
+  font-size:1.05rem; }
+a.profile .counts { color:var(--fg); font-size:0.9rem; white-space:nowrap; }
+a.profile .counts b { color:var(--prof); }
 p.empty { color:var(--muted); }
 """.strip()
 
+PROFILE_CSS = """
+main { max-width:44rem; }
+nav a { color:var(--link); text-decoration:none; }
+h2 { font-size:1.1rem; margin:1.6rem 0 0.5rem; }
+p.meta { color:var(--muted); margin:0 0 1rem; font-size:0.9rem; }
+div.item { border:1px solid var(--rule); border-radius:10px; background:var(--card);
+  padding:0.8rem 1rem; margin:0.5rem 0; }
+div.item.left { border-color:var(--prof); border-width:2px; }
+div.item .kind { font-weight:700; color:var(--prof); font-size:0.85rem; }
+div.item .sec { color:var(--muted); font-size:0.85rem; }
+div.item p { margin:0.4rem 0; }
+div.item .was { color:var(--muted); text-decoration:line-through; }
+div.item .why, div.item .ev { color:var(--muted); font-size:0.9rem; }
+pre.diff { overflow-x:auto; padding:0.8rem; border:1px solid var(--rule); border-radius:10px;
+  background:var(--card); font-size:0.8rem; line-height:1.4; white-space:pre; }
+pre.diff .add { color:#15803d; } pre.diff .del { color:#b91c1c; }
+@media (prefers-color-scheme: dark) {
+  pre.diff .add { color:#6ee7a0; } pre.diff .del { color:#fca5a5; }
+}
+""".strip()
 
-def index_html(runs: list[dict]) -> str:
-    items: list[str] = []
+
+def _profile_counts(u: dict) -> str:
+    parts = [f"<b>{u['applied']}</b> applied"] if u["applied"] else []
+    if u["left"]:
+        parts.append(f"<b>{u['left']}</b> need you")
+    if u["unmatched"]:
+        parts.append(f"{u['unmatched']} unmatched")
+    return " &middot; ".join(parts)
+
+
+def index_html(runs: list[dict], profile_updates: list[dict] | None = None) -> str:
+    # (run_id, rank, html): a profile update is written after its run's
+    # brief is delivered, so for the same RUN_ID it sorts above the brief.
+    rows: list[tuple[str, int, str]] = []
     for r in runs:
         rid = html.escape(r["run_id"])
         unrated = r["total"] - r["rated"]
         cls = "run unrated" if unrated else "run"
         counts = f"{unrated} unrated" if unrated else "all rated"
-        items.append(
-            f'<a class="{cls}" href="/brief/{rid}"><span>{rid}</span>'
-            f'<span class="counts">{r["total"]} cards &middot; {counts}</span></a>'
+        rows.append(
+            (
+                r["run_id"],
+                0,
+                f'<a class="{cls}" href="/brief/{rid}"><span>{rid}</span>'
+                f'<span class="counts">{r["total"]} cards &middot; {counts}</span></a>',
+            )
         )
+    for u in profile_updates or []:
+        rid = html.escape(u["run_id"])
+        rows.append(
+            (
+                u["run_id"],
+                1,
+                f'<a class="profile" href="/profile/{rid}"><span class="tag">Profile updated</span>'
+                f'<span class="what"><span>{rid}</span>'
+                f'<span class="counts">{_profile_counts(u)}</span></span></a>',
+            )
+        )
+    rows.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    items = [row[2] for row in rows]
     body = "\n".join(items) if items else '<p class="empty">No feedback files found.</p>'
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -315,6 +419,95 @@ def index_html(runs: list[dict]) -> str:
 <body>
 <main>
 <h1>pi-pulse feedback</h1>
+{body}
+</main>
+</body>
+</html>
+"""
+
+
+def _item_html(p: dict, cls: str, note: str = "") -> str:
+    def esc(key: str) -> str:
+        return html.escape(str(p.get(key) or ""))
+
+    kind = esc("type") or "?"
+    parts = [f'<div class="{cls}">', f'<span class="kind">{kind}</span> <span class="sec">{esc("section")}</span>']
+    if p.get("target") and kind in ("EDIT", "DEMOTE"):
+        parts.append(f'<p class="was">{esc("target")}</p>')
+    if p.get("text") and kind != "DEMOTE":
+        parts.append(f"<p>{esc('text')}</p>")
+    if p.get("rationale"):
+        parts.append(f'<p class="why">{esc("rationale")}</p>')
+    if p.get("evidence"):
+        parts.append(f'<p class="ev">Evidence: {esc("evidence")}</p>')
+    if note:
+        parts.append(f'<p class="why">{html.escape(note)}</p>')
+    parts.append("</div>")
+    return "\n".join(parts)
+
+
+def _diff_html(diff: str) -> str:
+    out = []
+    for line in diff.splitlines():
+        esc = html.escape(line)
+        if line.startswith("+") and not line.startswith("+++"):
+            out.append(f'<span class="add">{esc}</span>')
+        elif line.startswith("-") and not line.startswith("---"):
+            out.append(f'<span class="del">{esc}</span>')
+        else:
+            out.append(esc)
+    return "\n".join(out)
+
+
+def profile_html(run_id: str, report: dict) -> str:
+    rid = html.escape(run_id)
+    applied = report.get("applied") or []
+    left = report.get("left_for_reader") or []
+    unmatched = report.get("unmatched") or []
+    sections: list[str] = []
+    if left:
+        sections.append("<h2>Needs you</h2>")
+        sections.append(
+            "<p>These touch <code>## Avoid</code>, which changes only by hand. "
+            "To accept one, edit <code>memory/interests.md</code> yourself.</p>"
+        )
+        sections.extend(_item_html(p, "item left") for p in left)
+    if applied:
+        sections.append(f"<h2>Applied ({len(applied)})</h2>")
+        sections.extend(_item_html(p, "item") for p in applied)
+    if unmatched:
+        sections.append(f"<h2>Not applied ({len(unmatched)})</h2>")
+        sections.extend(_item_html(p, "item", str(p.get("reason") or "")) for p in unmatched)
+    if not sections:
+        sections.append('<p class="empty">No proposals this week: the profile is current.</p>')
+    diff = str(report.get("diff") or "")
+    if diff:
+        sections.append("<h2>Diff</h2>")
+        sections.append(f'<pre class="diff">{_diff_html(diff)}</pre>')
+    snapshot = str(report.get("snapshot") or "")
+    if snapshot:
+        sections.append(
+            f'<p class="meta">Previous version saved as <code>{html.escape(snapshot)}</code>; '
+            "copy it back over <code>memory/interests.md</code> to undo this week.</p>"
+        )
+    model = html.escape(str(report.get("model") or "unknown model"))
+    body = "\n".join(sections)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profile update {rid}</title>
+<style>
+{INDEX_CSS}
+{PROFILE_CSS}
+</style>
+</head>
+<body>
+<main>
+<nav><a href="/">&larr; all briefs</a></nav>
+<h1>Profile update {rid}</h1>
+<p class="meta">Weekly automatic update of <code>memory/interests.md</code>, proposed by {model}.</p>
 {body}
 </main>
 </body>
@@ -657,7 +850,13 @@ class FeedbackHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         if path == "/":
-            self._send_html(200, index_html(discover_runs(self.out_dir)), csp=INDEX_CSP)
+            self._send_html(
+                200,
+                index_html(discover_runs(self.out_dir), discover_profile_updates(self.out_dir)),
+                csp=INDEX_CSP,
+            )
+        elif path.startswith("/profile/"):
+            self._serve_profile(path[len("/profile/") :])
         elif path.startswith("/brief/assets/mathjax/"):
             self._serve_mathjax_asset(path[len("/brief/assets/mathjax/") :])
         elif path.startswith("/assets/mathjax/"):
@@ -690,6 +889,16 @@ class FeedbackHandler(BaseHTTPRequestHandler):
             self._not_found()
             return
         self._send(200, target.read_bytes(), ctype)
+
+    def _serve_profile(self, run_id: str) -> None:
+        if not valid_run_id(run_id):
+            self._not_found()
+            return
+        report = load_profile_report(self.out_dir, run_id)
+        if report is None:
+            self._not_found()
+            return
+        self._send_html(200, profile_html(run_id, report), csp=INDEX_CSP)
 
     def _serve_brief(self, run_id: str) -> None:
         # The regex gate is what makes the path constructions below safe:

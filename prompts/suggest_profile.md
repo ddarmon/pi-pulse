@@ -12,7 +12,10 @@ valued, were neutral on, or did not want).
 
 **You have no tools and must not call any.** Read the two attached
 files and output proposals as plain text to stdout. Do not edit the
-profile -- a separate human-gated step applies accepted proposals.
+profile yourself. A separate step applies your proposals **without a
+human reading them first** (except changes to `## Avoid`, which the
+user approves by hand), so each one must stand on its cited evidence:
+cite only the memo dates on which the thread actually appears.
 
 ## What to propose
 

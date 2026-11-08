@@ -24,17 +24,50 @@ awareness. This file picks up where that ends.
 
 ## Remaining backlog
 
-### 1. Profile-suggest cron (optional follow-up)
+### 1. Automatic weekly profile update (decided and shipped 2026-11-08)
 
-The weekly profile-suggest core shipped manual-first (see "Recently
-shipped: profile-suggest" below). The remaining optional piece is
-automation: a launchd weekly template (mirroring
-`launchd/com.user.pi-pulse.plist.template`, double-brace convention)
-that runs `scripts/suggest-profile.sh` every Sunday, plus a one-line
-"N profile suggestions pending" note in `pulse.sh`'s summary when
-`.tmp/profile_updates.md` is newer than `interests.md`. Deferred
-deliberately until the user has seen a few weeks of proposals and trusts
-their quality; `apply-updates.sh` stays the human gate either way.
+The manual gate never ran: the profile went unedited from 2026-07-05
+to 2026-11-08 while 67 memos accrued. Replace it with an automatic
+weekly update. Decisions, as answered by the user before building:
+
+-   **What applies automatically.** ADD, EDIT and DEMOTE proposals apply
+    without a prompt, except anything that touches `## Avoid` -- an ADD
+    into it, or an EDIT/DEMOTE whose matched target sits in it. Those are
+    left for the reader, listed in the report. The Avoid list changes
+    only when the reader edits it. A target that does not match exactly
+    is skipped, never guessed (existing `apply_updates.py` behavior).
+-   **Cadence.** Weekly, on Sunday (`PI_PULSE_PROFILE_UPDATE_WEEKDAY`,
+    ISO 1-7, default 7), with a catch-up run when the newest report is
+    more than 7 days old (so a missed Sunday, or the first run ever,
+    still fires). `PI_PULSE_PROFILE_UPDATE=0` disables it.
+-   **Where it runs.** Inside `pulse.sh`, after deliver, inline (not via
+    `scripts/suggest-profile.sh`, which hits the launchd uv quirk noted
+    at step 1c) and non-fatal. After deliver, so it never delays or
+    sinks a brief; the next day's run reads the updated profile. No new
+    LaunchAgent, so no new wrapper app or TCC consent.
+-   **Model.** `kimi-k3.1-pro:cloud` at `high`, replacing
+    `gemma4:31b-cloud`. Gemma was chosen because kimi-k2.6 emitted
+    ~72k chars of inline chain-of-thought and saturated pi's output cap;
+    that does not hold for kimi-k3.1-pro. Measured 2026-11-08 on the same
+    7-day input (8 memos, 88 KB): gemma4 5s, kimi low 29s, kimi high 45s,
+    5 clean proposals each, all applying cleanly. Gemma cited every memo
+    date in every proposal's Evidence regardless of where the thread
+    appeared (a two-day thread claimed all seven), which matters once no
+    human reads the evidence before it lands; Kimi's citations were
+    close to the memos, with one off-by-one-day overclaim. Kimi at high
+    also edited existing bullets where gemma and Kimi-low added
+    near-duplicates.
+-   **How the reader hears about it.** A distinct entry in the feedback
+    server's index (`/`), interleaved with the briefs by date and styled
+    unlike a brief, linking to `/profile/<RUN_ID>`: what was applied, what
+    was left for the reader and why, and the diff. Reports live at
+    `out/profile/<RUN_ID>.json` (gitignored with `out/`, untouched by
+    retention pruning). The profile is snapshotted to
+    `memory/interests-history/` before each write, so any week reverts by
+    copying one file back.
+
+`scripts/suggest-profile.sh` + `scripts/apply-updates.sh` stay as the
+manual path.
 
 ### 2. Strict citation verify-then-include (defer)
 
