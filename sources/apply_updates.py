@@ -145,7 +145,11 @@ def apply_edit(lines: list[str], target: str, text: str) -> tuple[list[str], boo
     if isinstance(res, str):
         return lines, False, res
     start, end = res
-    return lines[:start] + [text] + lines[end:], True, "replaced bullet"
+    # Keep the target's nesting. The model copies the bullet text but not
+    # its leading indentation, so a replaced sub-bullet would otherwise jump
+    # to the top level and re-parent the sub-bullets that follow it.
+    indent = lines[start][: len(lines[start]) - len(lines[start].lstrip())]
+    return lines[:start] + [indent + text.lstrip()] + lines[end:], True, "replaced bullet"
 
 
 def apply_demote(lines: list[str], target: str) -> tuple[list[str], bool, str]:
