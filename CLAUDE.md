@@ -300,12 +300,12 @@ The digest is consumed daily by the plan stage (attached to the
 compose_plan pi call as a ranking prior, with a `## Tendencies`
 per-tag summary up top; pulse.sh logs a one-line census of it before
 plan and guarantees a stub exists so the attachment never dangles) and
-weekly by the profile-suggest stage (below). For the daily plan path
+weekly by the profile-update step (below). For the daily plan path
 the digest is capped at `PI_PULSE_FEEDBACK_DIGEST_MAX` rows per section
 (default 20; `--max-per-section`, 0 = unlimited) -- an uncapped ~184-row
 digest tripled the plan call's output and latency; `## Tendencies` is
 still computed over every in-window row, not the capped subset. The
-weekly profile-suggest path passes no cap (full digest). Unrated
+weekly profile-update path passes no cap (full digest). Unrated
 (`[ ]`) cards are skipped; `[--]` does not auto-suppress a topic (the URL
 is already in `seen_urls.jsonl`), it only flags an avoid-candidate --
 plan may still cover such a topic when today's memo names a fresh,
@@ -390,44 +390,68 @@ Which machine currently runs what is deployment state, not repo
 knowledge: record it in `DEPLOYMENT.local.md` (gitignored, see
 `DEPLOYMENT.example.md`).
 
-## Profile-suggest (weekly, manual)
+## Profile update (weekly, automatic)
 
-A human-gated weekly step that surfaces drift between the durable
-profile (`memory/interests.md`) and what the user has actually been
-doing. It is decoupled from `pulse.sh` (no daily-run latency); the only
-daily-run touch is step 2b archiving each memo to `logs/${RUN_ID}/memo.md`.
+A weekly step keeps the durable profile (`memory/interests.md`) in step
+with what the user has actually been doing. It was human-gated until
+2026-11-08 and never ran: the profile sat unedited from 2026-07-05 while
+67 memos accrued, so it now applies its own proposals.
 
-`scripts/suggest-profile.sh [DAYS]` (default 7) refreshes the feedback
-digest, builds an input bundle via `sources/build_suggest_input.py`
-(last N days of archived memos, falling back to recent `out/*.md`
-briefs until memos accrue, plus `.tmp/feedback_recent.md`), and runs one
-no-tools `pi` call on `prompts/suggest_profile.md` to emit 0--6
-machine-parseable proposals (`ADD`/`EDIT`/`DEMOTE`) to
-`.tmp/profile_updates.md`. It never edits the profile.
+**Where and when.** `pulse.sh` step 8b, after deliver, inline and
+non-fatal: it cannot delay or sink a brief, and the next day's run reads
+the updated profile. It is due on `PI_PULSE_PROFILE_UPDATE_WEEKDAY` (ISO
+1-7, default 7 = Sunday) or whenever the newest `out/profile/*.json` is
+more than 7 days old, which also makes the first run after install fire.
+A failed attempt writes no report, so the catch-up rule retries the next
+day. `PI_PULSE_PROFILE_UPDATE=0` disables it. It runs inline rather than
+via `scripts/suggest-profile.sh` because of the launchd uv quirk noted at
+step 1c.
 
-**This stage uses `gemma4:31b-cloud`, not the pipeline's
-`kimi-k2.6:cloud`** (override `PI_SUGGEST_MODEL`). This is load-bearing:
-kimi emits ~72k chars of inline chain-of-thought on this evaluative task
-regardless of `--thinking` (`off` only suppresses reasoning on trivial
-prompts), saturating the fixed 16,384-token output cap and emitting no or
-truncated proposals across three live runs. gemma4 is a non-reasoning
-instruct model that returned clean proposals in ~6s / ~450 output tokens.
-pi exposes no max-output-tokens flag, so a non-reasoning model is the
-fix. The brief fallback is also condensed to titles + lede
-(`build_suggest_input.condense_brief`) to keep the input compact. If you
-point `PI_SUGGEST_MODEL` at a reasoning model, set `PI_SUGGEST_THINKING`
-accordingly (default: unset, no `--thinking` flag passed).
+**What it does.** Builds the full (uncapped) feedback digest into
+`.tmp/feedback_suggest.md`, bundles the last `PI_PULSE_SUGGEST_DAYS`
+(default 7) days of archived memos with it via
+`sources/build_suggest_input.py` (each memo already covers 30 days of
+chats), and runs one sealed no-tools `pi` call on
+`prompts/suggest_profile.md` for 0--6 `ADD`/`EDIT`/`DEMOTE` proposals.
+`sources/apply_updates.py --auto` then applies every proposal **except
+one that touches `## Avoid`** -- an ADD into it, or an EDIT/DEMOTE whose
+target is *located* in it, whatever the proposal's own `Section:` says.
+The Avoid list is the reader's veto and changes only by hand. Targets are
+matched whitespace-normalized (wrapped bullets match); a missing or
+ambiguous target is reported, never guessed. The profile is snapshotted
+to `memory/interests-history/` before any write, so a bad week reverts by
+copying one file back.
 
-`scripts/apply-updates.sh` (-> `sources/apply_updates.py`) walks the
-proposals interactively (`y`/`n`/`q`), snapshots the profile to
-`memory/interests-history/` before any write (same pattern as
-`interview.sh`), applies accepted ADDs (append bullet under the named
-section) and EDIT/DEMOTE (locate the target bullet by
-whitespace-normalized match, so wrapped bullets match; ambiguous or
-missing targets are reported for manual handling, never guessed), and
-prints a unified diff. `--dry-run` shows changes without writing. Both
-scripts make zero model calls except the single suggest `pi` call.
-There is no cron yet -- run it weekly when convenient.
+**How the reader hears about it.** `out/profile/<RUN_ID>.json` records
+what applied, what was left for the reader, what did not match, and the
+diff. The feedback server lists every report with a change as a violet
+"Profile updated" entry on its index, above that day's brief, linking to
+`/profile/<RUN_ID>`. Weeks with no proposals write a report (so the
+cadence counts them) but are not listed. Step 8b's one-line result is
+also in the run's stdout log, and the full output in
+`logs/${RUN_ID}/profile-update.log`.
+
+**Model: `kimi-k3.1-pro:cloud` at `high`** (`PI_SUGGEST_{MODEL,PROVIDER,THINKING}`,
+shared with the manual script; an explicitly empty `PI_SUGGEST_THINKING`
+passes no flag). Until 2026-11-08 this stage ran `gemma4:31b-cloud`,
+because kimi-k2.6 emitted ~72k chars of inline chain-of-thought on this
+task and saturated pi's 16,384-token output cap. kimi-k3.1-pro does not.
+Measured 2026-11-08 on one 7-day input (8 memos, 88 KB): gemma4 5s, kimi
+low 29s, kimi high 45s, five clean proposals each, all of which applied.
+The deciding difference is evidence: gemma4 cited every memo date for
+every proposal (a thread on two days claimed seven), which no longer gets
+caught once no one reads proposals before they land; Kimi's citations
+tracked the memos, with one off-by-one-day overclaim. Kimi at high also
+edited existing bullets where the others added near-duplicates. The
+model check for this stage runs inside step 8b, so a catalog problem
+skips the update rather than aborting the brief.
+
+**Manual path.** `scripts/suggest-profile.sh [DAYS]` writes proposals to
+`.tmp/profile_updates.md`; `scripts/apply-updates.sh` walks them
+interactively (`y`/`n`/`q`), with `--dry-run`, `--accept-all`, or
+`--auto`. Run either with stdin closed or from a terminal: `pi -p` waits
+for stdin EOF, so an ssh session that leaves stdin open hangs the call
+(seen 2026-11-08; launchd supplies `/dev/null`).
 
 ## Debugging a run
 
@@ -450,6 +474,9 @@ There is no cron yet -- run it weekly when convenient.
 -   `logs/${RUN_ID}/capabilities.jsonl` -- prompt-free evidence of provider,
     model, thinking level, and security flags extracted from each exact Pi
     invocation.
+-   `logs/${RUN_ID}/profile-update.log` and `out/profile/${RUN_ID}.json`
+    -- the weekly profile update's full output and its report (only on
+    days it was due).
 -   `logs/${RUN_ID}/check-models.err` -- the preflight catalog verdict. A
     failure here aborts the run before the first pi call and names exactly
     which stage/model/thinking level the catalog cannot support.

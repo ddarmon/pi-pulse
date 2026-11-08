@@ -104,7 +104,7 @@ LOG_DIR="logs/${RUN_ID}"
 PENDING_OUT="$LOG_DIR/brief.pending.md"
 export RUN_ID
 PI_PROVIDER="${PI_PROVIDER:-ollama}"
-PI_MODEL="${PI_MODEL:-glm-5.2:cloud}"
+PI_MODEL="${PI_MODEL:-kimi-k3.1-pro:cloud}"
 
 # Per-stage model/provider/thinking overrides. Each falls back to the
 # global PI_PROVIDER/PI_MODEL, so with nothing set the four stages all run
@@ -132,12 +132,22 @@ EXPAND_THINKING="${PI_PULSE_EXPAND_THINKING:-}"
 LEDE_PROVIDER="${PI_PULSE_LEDE_PROVIDER:-$PLAN_PROVIDER}"
 LEDE_MODEL="${PI_PULSE_LEDE_MODEL:-$PLAN_MODEL}"
 LEDE_THINKING="${PI_PULSE_LEDE_THINKING:-$PLAN_THINKING}"
+# Weekly automatic profile update (step 8b). Runs on PROFILE_UPDATE_WEEKDAY
+# (ISO 1=Mon..7=Sun) or whenever the newest report is more than 7 days old.
+# PI_SUGGEST_* are shared with the manual scripts/suggest-profile.sh.
+PROFILE_UPDATE="${PI_PULSE_PROFILE_UPDATE:-1}"
+PROFILE_UPDATE_WEEKDAY="${PI_PULSE_PROFILE_UPDATE_WEEKDAY:-7}"
+SUGGEST_DAYS="${PI_PULSE_SUGGEST_DAYS:-7}"
+SUGGEST_PROVIDER="${PI_SUGGEST_PROVIDER:-$PI_PROVIDER}"
+SUGGEST_MODEL="${PI_SUGGEST_MODEL:-kimi-k3.1-pro:cloud}"
+SUGGEST_THINKING="${PI_SUGGEST_THINKING-high}"
 
 # Optional --thinking flags, present only when the stage's level is set.
 distill_think=(); [[ -n "$DISTILL_THINKING" ]] && distill_think=(--thinking "$DISTILL_THINKING")
 scout_think=();   [[ -n "$SCOUT_THINKING"   ]] && scout_think=(--thinking "$SCOUT_THINKING")
 plan_think=();    [[ -n "$PLAN_THINKING"    ]] && plan_think=(--thinking "$PLAN_THINKING")
 lede_think=();    [[ -n "$LEDE_THINKING"    ]] && lede_think=(--thinking "$LEDE_THINKING")
+suggest_think=(); [[ -n "$SUGGEST_THINKING" ]] && suggest_think=(--thinking "$SUGGEST_THINKING")
 
 # Repo-owned Pi model catalog. ~/.pi/agent/models.json is machine-global
 # and rewritten by `ollama launch pi` / `pi update`; a launcher-written
@@ -431,7 +441,7 @@ if [[ -n "$distill_session" ]]; then
     > "$LOG_DIR/distill.log.md"
 fi
 
-# 2b. Archive this run's memo so the weekly profile-suggest stage has a
+# 2b. Archive this run's memo so the weekly profile update (step 8b) has a
 # per-run history to read (logs/ is gitignored and keyed on RUN_ID).
 cp .tmp/interests_today.md "$LOG_DIR/memo.md"
 
@@ -832,6 +842,69 @@ if [[ -n "${PI_PULSE_DELIVERY:-}" ]]; then
   if [[ -n "$FEEDBACK" && -f "$FEEDBACK" ]]; then
     cp "$FEEDBACK" "$PI_PULSE_DELIVERY/${RUN_ID}.feedback.md"
   fi
+fi
+
+# 8b. Weekly automatic profile update. Proposes 0-6 evidence-grounded edits
+# to memory/interests.md from the last SUGGEST_DAYS days of archived memos
+# plus the full feedback digest, then applies all of them except any that
+# touch `## Avoid` (the reader's veto, changed only by hand). The profile
+# is snapshotted to memory/interests-history/ before any write, and
+# out/profile/<RUN_ID>.json records what applied, what was left for the
+# reader, and the diff; the feedback server lists it on its index page.
+# Runs after deliver so it can never delay or sink a brief, and inline
+# rather than via scripts/suggest-profile.sh for the launchd uv quirk
+# described at step 1c. Non-fatal throughout; a failed run writes no
+# report, so the catch-up rule retries it the next day.
+profile_update_due() {
+  python3 - "$PROFILE_UPDATE_WEEKDAY" <<'PY'
+import sys
+from datetime import date, datetime
+from pathlib import Path
+
+weekday = int(sys.argv[1])
+dates = []
+for f in Path("out/profile").glob("*.json"):
+    try:
+        dates.append(datetime.strptime(f.name[:10], "%Y-%m-%d").date())
+    except ValueError:
+        pass
+today = date.today()
+last = max(dates, default=None)
+due = last is None or (today - last).days > 7 or (today.isoweekday() == weekday and last != today)
+sys.exit(0 if due else 1)
+PY
+}
+
+if [[ "$PROFILE_UPDATE" == 0 ]]; then
+  log "profile update: disabled (PI_PULSE_PROFILE_UPDATE=0)"
+elif [[ ! -f memory/interests.md ]]; then
+  log "profile update: skipped (no memory/interests.md)"
+elif profile_update_due; then
+  log "profile update: ${SUGGEST_PROVIDER}/${SUGGEST_MODEL}${SUGGEST_THINKING:+ thinking=$SUGGEST_THINKING} over ${SUGGEST_DAYS}d of memos"
+  mkdir -p "$SESSION_DIR/suggest" out/profile
+  {
+    uv run sources/check_models.py "$PI_AGENT_DIR/models.json" \
+      --require suggest "$SUGGEST_PROVIDER" "$SUGGEST_MODEL" "$SUGGEST_THINKING" \
+    && uv run sources/build_feedback_digest.py --max-per-section 0 \
+         --out .tmp/feedback_suggest.md \
+    && uv run sources/build_suggest_input.py --days "$SUGGEST_DAYS" \
+         --digest .tmp/feedback_suggest.md \
+    && run_pi_retry .tmp/profile_updates.md "$LOG_DIR/suggest.err" suggest -- \
+         env -u BRAVE_API_KEY pi -p "$(sed -e "s|{{DAYS}}|${SUGGEST_DAYS}|g" prompts/suggest_profile.md)" \
+           --provider "$SUGGEST_PROVIDER" --model "$SUGGEST_MODEL" \
+           ${suggest_think[@]+"${suggest_think[@]}"} \
+           --no-tools --no-context-files --no-extensions --no-skills \
+           --session-dir "$SESSION_DIR/suggest" \
+           @memory/interests.md @.tmp/suggest_input.md \
+    && uv run sources/apply_updates.py --auto \
+         --proposals .tmp/profile_updates.md \
+         --report "out/profile/${RUN_ID}.json" \
+         --run-id "$RUN_ID" --model "$SUGGEST_MODEL"
+  } > "$LOG_DIR/profile-update.log" 2>&1 </dev/null \
+    && log "profile update: $(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(len(r["applied"]), "applied,", len(r["left_for_reader"]), "left for you,", len(r["unmatched"]), "unmatched")' "out/profile/${RUN_ID}.json" 2>/dev/null || echo "done") (see $LOG_DIR/profile-update.log)" \
+    || log "WARN: profile update failed; see $LOG_DIR/profile-update.log"
+else
+  log "profile update: not due"
 fi
 
 # Private model transcripts and per-run memos/logs are useful for debugging,

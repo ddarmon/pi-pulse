@@ -196,7 +196,10 @@ again.
 ## Tuning
 
 -   Edit `memory/interests.md` -- it feeds every run. Or run
-    `./scripts/interview.sh` for a guided refresh.
+    `./scripts/interview.sh` for a guided refresh. Once a week the run
+    also updates it on its own from your recent memos and ratings,
+    except the `## Avoid` section; each change shows up as a "Profile
+    updated" entry on the feedback server's index.
 -   Card mix: set `PI_PULSE_CARDS_TRACKED`, `PI_PULSE_CARDS_ADJACENT`,
     `PI_PULSE_CARDS_BRIDGE` in `.env`. Defaults: 5 / 2 / 1 = 8 cards.
 -   Card shape and structure: `prompts/compose_expand.md` (word budget,

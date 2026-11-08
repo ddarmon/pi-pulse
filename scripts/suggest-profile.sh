@@ -43,18 +43,16 @@ for shared in auth.json trust.json settings.json; do
 done
 export PI_CODING_AGENT_DIR="$PI_AGENT_DIR"
 
-# This stage deliberately does NOT use the pipeline's kimi-k2.6:cloud.
-# That model emits ~72k chars of inline chain-of-thought on this
-# evaluative task regardless of --thinking (off only suppresses it on
-# trivial prompts), saturating the fixed 16,384-token output cap and
-# emitting no/truncated proposals. gemma4:31b-cloud is a non-reasoning
-# instruct model: it produced 3 clean proposals in ~6s / 449 output
-# tokens. Override with PI_SUGGEST_MODEL.
-SUGGEST_MODEL="${PI_SUGGEST_MODEL:-gemma4:31b-cloud}"
-# Optional thinking level; empty means don't pass --thinking at all
-# (gemma is non-reasoning and needs none). Set if you point
-# PI_SUGGEST_MODEL at a reasoning model that honors it.
-THINKING="${PI_SUGGEST_THINKING:-}"
+# Same model and level as pulse.sh's weekly step 8b (PI_SUGGEST_* are
+# shared). This stage ran on gemma4:31b-cloud until 2026-11-08 because
+# kimi-k2.6 emitted ~72k chars of inline chain-of-thought here and
+# saturated pi's output cap. kimi-k3.1-pro does not: on the same 7-day
+# input it returned 5 clean proposals in 45s at high, with Evidence
+# citations that matched the memos, where gemma4 cited every memo date
+# for every proposal. Set PI_SUGGEST_THINKING= (empty) to pass no
+# --thinking flag, e.g. for a non-reasoning model.
+SUGGEST_MODEL="${PI_SUGGEST_MODEL:-kimi-k3.1-pro:cloud}"
+THINKING="${PI_SUGGEST_THINKING-high}"
 DAYS="${1:-${PI_PULSE_SUGGEST_DAYS:-7}}"
 TS=$(date +%Y-%m-%d-%H%M)
 SESSION_DIR=".pulse-sessions/suggest/${TS}"
