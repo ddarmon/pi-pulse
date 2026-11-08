@@ -77,6 +77,32 @@ class TestTouchesAvoid(unittest.TestCase):
         self.assertFalse(apply_updates.touches_avoid(lines, {"type": "ADD", "section": "### General"}))
 
 
+class TestEditKeepsNesting(unittest.TestCase):
+    def test_sub_bullet_stays_nested(self):
+        lines = [
+            "## Active tooling",
+            "",
+            "-   Decks:",
+            "    -   Math deck.",
+            "    -   Card generation: ad hoc prompt,",
+            "        after retiring the pipeline.",
+            "    -   Decks are healthy.",
+        ]
+        new, ok, _ = apply_updates.apply_edit(
+            lines,
+            "-   Card generation: ad hoc prompt, after retiring the pipeline.",
+            "-   Card generation: a shared skill, after retiring the pipeline.",
+        )
+        self.assertTrue(ok)
+        self.assertEqual(new[4], "    -   Card generation: a shared skill, after retiring the pipeline.")
+        self.assertEqual(new[5], "    -   Decks are healthy.")
+
+    def test_top_level_edit_unchanged(self):
+        new, ok, _ = apply_updates.apply_edit(["-   Old."], "-   Old.", "-   New.")
+        self.assertTrue(ok)
+        self.assertEqual(new, ["-   New."])
+
+
 class TestAutoCli(unittest.TestCase):
     def run_auto(self, proposals: str, *extra: str) -> tuple[Path, dict]:
         tmp = Path(tempfile.mkdtemp(prefix="pulse-apply-"))
