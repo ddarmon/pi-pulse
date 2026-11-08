@@ -17,6 +17,30 @@
       "baseUrl": "{{OLLAMA_BASE_URL}}",
       "models": [
         {
+          "id": "kimi-k3.1-pro:cloud",
+          "contextWindow": 1048576,
+          "reasoning": true,
+          "input": ["text", "image"],
+          "_comment": [
+            "All four stages since 2026-11-09. Blind Opus judging of replayed",
+            "2026-11 inputs (both A/B orders) preferred it to glm-5.3 on expand",
+            "64-4 and distill 15-0 across two replicates; plan split 6-6.",
+            "contextWindow from Ollama /api/show (kimi-k3.context_length).",
+            "Only low and high were exercised in that comparison. off/minimal",
+            "map to null because a true thinking-off has not been verified on",
+            "this model -- see the glm-5.3 entry for what an unverified `none`",
+            "cost once -- so check_models.py fails the run rather than guess."
+          ],
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "max"
+          }
+        },
+        {
           "id": "glm-5.3:cloud",
           "contextWindow": 1048576,
           "reasoning": true,

@@ -114,12 +114,15 @@ discovered URLs), not imagined sources, so cards rarely drop in expand.
 ## Cost and runtime awareness
 
 A full `./pulse.sh` run takes roughly 8--12 min and makes `3 + N` pi
-calls against `glm-5.3:cloud`, where N is the planned card count
+calls against `kimi-k3.1-pro:cloud`, where N is the planned card count
 (default cap 8). Per-card expand calls run in parallel
 (`PI_PULSE_EXPAND_PARALLEL`, default 4), so wall time scales with
-`max(per-card)`, not the sum. Operating assumption: unlimited Ollama
-subscription, so the call count is not budgeted. **Reintroduce a hard
-budget if the provider changes.** **Do not run pulse.sh speculatively**
+`max(per-card)`, not the sum. The Ollama Cloud subscription is **not**
+unlimited: it has a 5-hour session cap and a weekly cap, and Kimi K3.1
+Pro draws roughly 3x the quota per token that glm-5.3 does. The call
+count is still not budgeted in code; one nightly run is a small share
+of the weekly cap, but a burst of manual reruns is not free.
+**Do not run pulse.sh speculatively**
 -- only when the user explicitly asks for a test run.
 
 ## Conventions
@@ -140,21 +143,28 @@ budget if the provider changes.** **Do not run pulse.sh speculatively**
 -   **Pi-call count is variable.** `pulse.sh` invokes `pi` for distill,
     scout, plan, and once per planned card slot in parallel expand
     (capped by `PI_PULSE_EXPAND_PARALLEL`). This is the source-first
-    pipeline; it relies on an unlimited Ollama subscription. If the
-    provider changes, reintroduce a hard call budget in `pulse.sh`.
+    pipeline; there is no hard call budget in `pulse.sh`, so the
+    subscription's session and weekly caps are the only limit (see Cost
+    and runtime awareness).
 -   **Per-stage model selection.** Each stage (distill, scout, plan,
     expand) takes independent `PI_PULSE_<STAGE>_{MODEL,PROVIDER,THINKING}`
     overrides, each falling back to the global `PI_MODEL`/`PI_PROVIDER`.
-    As of 2026-08-30 the local `.env` runs **all four stages on
-    `glm-5.3:cloud`** (top open-weight model as of August 2026) with
-    explicit thinking levels: scout/expand `low`, distill/plan `high`.
-    Set them explicitly -- pi hardcodes `DEFAULT_THINKING_LEVEL = medium`
+    As of 2026-11-09 the local `.env` runs **all four stages on
+    `kimi-k3.1-pro:cloud`** with explicit thinking levels: scout/expand
+    `low`, distill/plan `high`. A blind replay comparison against
+    glm-5.3 in 2026-11 (Opus judges, both A/B orders, two replicates)
+    favored Kimi on expand 64-4 and distill 15-0, mostly on faithfulness:
+    glm-5.3 invented facts about the reader and the source. Plan split
+    6-6, so scout and plan moved too only to keep one model across the
+    pipeline. Set the thinking levels explicitly -- pi hardcodes
+    `DEFAULT_THINKING_LEVEL = medium`
     whenever `--provider/--model` are passed without `--thinking`, so an
     unset stage is not an unset level. (Earlier: all four on
+    `glm-5.3:cloud` from 2026-08-30; all four on
     `glm-5.2:cloud` from ~2026-06-18; before that distill+plan on
     `minimax-m3:cloud` and scout+expand on `kimi-k2.6:cloud` because kimi
-    saturated the harder synthesis prompts. All three remain in the
-    catalog as alternatives.)
+    saturated the harder synthesis prompts. All four remain in the
+    catalog as alternatives, so reverting is one `.env` line per stage.)
 -   **GLM-5.3 cannot stop thinking, and asking it to corrupts the stage.**
     `reasoning_effort` accepts only `low|high|max` (default `max`); Z.ai's
     API answers 400 (code 1210) on anything else. Ollama does *not* reject
