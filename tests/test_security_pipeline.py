@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -652,6 +653,46 @@ class CapabilityEvidenceTests(unittest.TestCase):
             self.assertEqual(record["stage"], "expand")
             self.assertEqual(record["slot"], "03")
             self.assertTrue(record["no_tools"])
+
+    def test_every_run_pi_retry_label_is_an_accepted_stage(self) -> None:
+        # Regression: the weekly profile update called run_pi_retry with the
+        # label "suggest", which log_capability rejected, so the stage failed
+        # before its pi call on 2026-11-15. Every label must be accepted by
+        # the logger and known to the audit.
+        pulse = (REPO / "pulse.sh").read_text()
+        labels = set(re.findall(r'run_pi_retry\s+\S+\s+\S+\s+([a-z]+)\s+--', pulse))
+        self.assertIn("suggest", labels)
+        self.assertIn("distill", labels)
+        for label in sorted(labels):
+            self.assertIn(label, log_capability.STAGES)
+            self.assertIn(label, audit_egress.EXPECTED_TOOLS)
+
+    def test_cli_accepts_the_suggest_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            log_path = Path(d) / "capabilities.jsonl"
+            env = dict(os.environ, PI_PULSE_CAPABILITY_LOG=str(log_path))
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO / "sources" / "log_capability.py"),
+                    "suggest",
+                    "--",
+                    "env", "-u", "BRAVE_API_KEY", "pi", "-p", "prompt",
+                    "--provider", "p", "--model", "m",
+                    "--no-tools", "--no-context-files", "--no-extensions", "--no-skills",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            record = json.loads(log_path.read_text())
+            self.assertEqual(record["stage"], "suggest")
+            # Optional, but sealed when present -- a re-audit must accept it.
+            self.assertEqual(
+                [v for v in audit_egress.audit_capabilities([record], {}) if "suggest" in v],
+                [],
+            )
 
     def test_command_parser_records_flags_but_not_prompt_text(self) -> None:
         evidence = log_capability.parse_pi_command(
