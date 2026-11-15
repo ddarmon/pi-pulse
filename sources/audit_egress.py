@@ -24,10 +24,13 @@ EXPECTED_TOOLS = {
     "plan": set(),
     "expand": set(),
     "lede": set(),
+    "suggest": set(),
 }
 # Stages that run only on some days. The lede rewrite runs only when a
-# planned card dropped, so its absence is not evidence of anything.
-OPTIONAL_STAGES = {"lede"}
+# planned card dropped, and the weekly profile update ("suggest") runs
+# after this audit, so its record appears only when a run is re-audited.
+# Absence of either is not evidence of anything.
+OPTIONAL_STAGES = {"lede", "suggest"}
 EXPECTED_EGRESS = {
     "scout": {"search", "fetch"},
     "expand": {"search", "fetch"},
@@ -38,6 +41,7 @@ PROMPTS = {
     "plan": Path("prompts/compose_plan.md"),
     "expand": Path("prompts/compose_expand.md"),
     "lede": Path("prompts/compose_lede.md"),
+    "suggest": Path("prompts/suggest_profile.md"),
 }
 
 

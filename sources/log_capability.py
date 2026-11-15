@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+# Every label pulse.sh passes to run_pi_retry must be listed here: an
+# unlisted one makes argparse exit 2 before the pi call, and the stage
+# fails without ever running. The weekly profile update ("suggest") was
+# left out when it was added and failed that way on 2026-11-15.
+STAGES = ("distill", "scout", "plan", "expand", "lede", "suggest")
 VALUE_FLAGS = {"--extension", "--model", "--provider", "--skill", "--thinking", "--tools"}
 
 
@@ -74,7 +79,7 @@ def append_record(path: Path, stage: str, slot: str | None, command: list[str]) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("distill", "scout", "plan", "expand", "lede"))
+    parser.add_argument("stage", choices=STAGES)
     parser.add_argument("--slot")
     # Split at the first `--` ourselves: argparse.REMAINDER matches
     # positionals greedily, so `expand --slot 01 -- pi ...` would swallow
