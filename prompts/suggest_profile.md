@@ -30,9 +30,32 @@ better than padding. Each proposal is one of:
 -   **DEMOTE** -- a profile item that has **not appeared at all** in the
     window and looks stale. Propose moving it to a dormant note or
     removing it; do not delete silently.
--   **EDIT** -- sharpen an existing bullet that the memos show is now
-    more specific than the profile records (e.g. a named method or
-    system the user is now actively working on).
+-   **EDIT** -- correct or extend an existing bullet without shrinking
+    it. The replacement must still cover everything durable the target
+    covers: its field-level scope, its named methods and references, and
+    any statement of why the user cares. Use EDIT to fix something the
+    memos show is now wrong, to add a durable reference, or to update a
+    `Current focus:` sub-bullet that already sits under a bullet (target
+    the sub-bullet line itself, not its parent).
+
+**The profile is the breadth; the memos are the present.** The daily
+pipeline already reads the memos, so this week's project state reaches
+the brief without your help. The profile exists to carry the long-lived
+interests that are *not* in this week's memos, and it loses that when a
+broad bullet is rewritten into the current project. So:
+
+-   Never replace a broad interest with the specific form it takes this
+    week. A bullet on the theory of a field must not become a bullet
+    about one model's internals; a bullet on learning a discipline's
+    foundations must not become one pipeline's design.
+-   When the memos show a durable interest has a new concrete focus,
+    leave the broad bullet untouched and propose an **ADD** for the
+    focus as its own bullet (or EDIT its existing `Current focus:`
+    sub-bullet).
+-   Implementation decisions, vendor and model names, and
+    work-in-progress design details are project state. Keep them out
+    unless the thread has plainly outlived a single project.
+-   A broad bullet narrows only by DEMOTE, when it has gone unseen.
 
 Also treat cards the user marked `[--]` (don't want) in the feedback
 digest as candidate **AVOID** additions, emitted as an ADD targeting the
@@ -77,9 +100,9 @@ Evidence: <why it looks stale: absent from all memos in the window>
 PROPOSAL: EDIT
 Section: ### General
 Target: -   <the exact existing line to replace, copied from the profile>
-Text: -   <the sharpened replacement line>
+Text: -   <the replacement line, keeping the target's durable scope>
 Rationale: <one sentence>
-Evidence: <memo dates showing the sharper specificity>
+Evidence: <memo dates supporting the correction or addition>
 ```
 
 `Section` is the exact `##` or `###` heading the bullet belongs under.

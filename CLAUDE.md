@@ -422,6 +422,22 @@ ambiguous target is reported, never guessed. The profile is snapshotted
 to `memory/interests-history/` before any write, so a bad week reverts by
 copying one file back.
 
+**Edits must not narrow a bullet.** Scout uses the profile only for
+interests that are *not* in today's memo, and the memo already carries
+the current project state, so a profile bullet rewritten into this
+week's specifics duplicates the memo and loses the breadth the profile
+exists to hold. The first applied run (2026-11-15) did exactly that:
+three of its four EDITs replaced a field-level interest with the design
+details of a current project, one of them deleting the bullet's stated
+reason for the interest. The old prompt asked for it ("sharpen an
+existing bullet"). `prompts/suggest_profile.md` now requires an EDIT to
+keep the target's durable scope and sends a new concrete focus to an ADD
+or to an existing `Current focus:` sub-bullet. The applier treats a
+nested sub-bullet as its own block, so an EDIT of a parent leaves its
+sub-bullets in place and an EDIT of a sub-bullet keeps its indent. This
+is a prompt rule, not a code gate: nothing rejects a narrowing EDIT, so
+check the weekly diff.
+
 **How the reader hears about it.** `out/profile/<RUN_ID>.json` records
 what applied, what was left for the reader, what did not match, and the
 diff. The feedback server lists every report with a change as a violet
